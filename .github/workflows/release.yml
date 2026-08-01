@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Repository quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, llvm-tools-preview, rustfmt
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,tokei
+      - run: cargo xtask verify
+
+  build:
+    name: ${{ matrix.name }}
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            suffix: ""
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            suffix: ""
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: .exe
+          - name: macOS Apple Silicon
+            os: macos-15
+            target: aarch64-apple-darwin
+            suffix: ""
+          - name: macOS Intel
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            suffix: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: mlugg/setup-zig@v2
+        if: runner.os == 'Linux'
+        with:
+          version: 0.16.0
+      - uses: taiki-e/install-action@v2
+        if: runner.os == 'Linux'
+        with:
+          tool: cargo-zigbuild@0.23.0
+      - name: Verify tag and package version
+        shell: pwsh
+        run: |
+          $packages = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages
+          $version = ($packages | Where-Object name -eq "taskfleet").version
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} does not match package version $version"
+          }
+      - run: cargo test --locked --target ${{ matrix.target }}
+      - name: Build portable Linux binary
+        if: runner.os == 'Linux'
+        run: cargo zigbuild --release --locked --target ${{ matrix.target }}.2.17
+      - name: Build native release binary
+        if: runner.os != 'Linux'
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package binary
+        shell: pwsh
+        run: |
+          $name = "taskfleet-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path "dist/$name" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/taskfleet${{ matrix.suffix }}" "dist/$name/"
+          Copy-Item README.md, LICENSE "dist/$name/"
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: taskfleet-${{ matrix.target }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum *.zip | sort > SHA256SUMS
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/*.zip \
+            dist/SHA256SUMS \
+            --verify-tag \
+            --title "Taskfleet ${GITHUB_REF_NAME}" \
+            --generate-notes

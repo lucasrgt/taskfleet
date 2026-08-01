@@ -1,0 +1,81 @@
+schema = 1
+
+[project]
+# Paths are relative to this example file. Change them to ".",
+# ".taskfleet/state.sqlite", and "../.taskfleet-worktrees" after copying it
+# to the repository root.
+repository = ".."
+database = "../.taskfleet/state.sqlite"
+worktree_root = "../../.taskfleet-worktrees"
+default_workflow = "delivery"
+
+# One imported task may appear in several views without being duplicated.
+[[view]]
+id = "all"
+filter = { op = "true" }
+
+[[view]]
+id = "viajantes"
+filter = { op = "eq", path = "meta.platform", value = "viajantes" }
+
+[[view]]
+id = "anfitrioes"
+filter = { op = "eq", path = "meta.platform", value = "anfitrioes" }
+
+[[view]]
+id = "municipios"
+filter = { op = "eq", path = "meta.platform", value = "municipios" }
+
+[[view]]
+id = "parceiros"
+filter = { op = "eq", path = "meta.platform", value = "parceiros" }
+
+[[view]]
+id = "website"
+filter = { op = "eq", path = "meta.platform", value = "website" }
+
+[[view]]
+id = "website-priority"
+filter = { op = "and", args = [
+  { op = "eq", path = "meta.platform", value = "website" },
+  { op = "in", path = "priority", values = ["urgent", "high"] }
+] }
+
+[[gate]]
+id = "format"
+kind = "command"
+command = ["cargo", "fmt", "--all", "--", "--check"]
+events = ["step.complete"]
+timeout_seconds = 120
+required = true
+
+[[gate]]
+id = "repository-verify"
+kind = "command"
+command = ["cargo", "xtask", "verify"]
+events = ["step.complete", "integration.merge"]
+timeout_seconds = 1200
+required = true
+
+[[gate]]
+id = "product-approval"
+kind = "approval"
+required = true
+when = { op = "contains", path = "tags", value = "product-review" }
+
+[[workflow]]
+id = "delivery"
+
+[[workflow.step]]
+id = "implementation"
+title = "Implement and commit the task"
+gates = ["format", "repository-verify"]
+
+[[workflow.step]]
+id = "product-review"
+title = "Review user-visible behavior"
+gates = ["repository-verify", "product-approval"]
+
+[[route]]
+workflow = "delivery"
+when = { op = "true" }

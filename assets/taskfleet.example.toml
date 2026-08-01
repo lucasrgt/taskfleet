@@ -1,0 +1,10 @@
+schema = 1
+
+[project]
+repository = "."
+database = ".taskfleet/state.sqlite"
+worktree_root = "../.taskfleet-worktrees"
+
+[[view]]
+id = "all"
+filter = { op = "true" }
