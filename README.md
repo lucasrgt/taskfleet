@@ -1,11 +1,20 @@
-# Taskfleet
+<h1 align="center">Taskfleet</h1>
 
-**Agent-first task orchestration across trackers, agents, and harnesses.**
+<p align="center"><strong>Agent-first task orchestration across trackers, agents, and harnesses.</strong></p>
 
-[![CI](https://github.com/lucasrgt/taskfleet/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lucasrgt/taskfleet/actions/workflows/ci.yml)
-[![MIT](https://img.shields.io/badge/license-MIT-2EA44F?style=flat-square)](LICENSE)
-![Rust](https://img.shields.io/badge/runtime-single%20Rust%20binary-B7410E?style=flat-square&logo=rust&logoColor=white)
-![Coverage](https://img.shields.io/badge/coverage-%E2%89%A595%25-2EA44F?style=flat-square)
+<p align="center">
+  <a href="#quick-install-with-your-agent">Quick Install</a> |
+  <a href="#getting-started">Getting Started</a> |
+  <a href="#mcp">MCP</a> |
+  <a href="ARCHITECTURE.md">Architecture</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/lucasrgt/taskfleet/actions/workflows/ci.yml"><img src="https://github.com/lucasrgt/taskfleet/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2EA44F?style=flat-square" alt="MIT License"></a>
+  <img src="https://img.shields.io/badge/runtime-single%20Rust%20binary-B7410E?style=flat-square&logo=rust&logoColor=white" alt="Single Rust binary">
+  <img src="https://img.shields.io/badge/storage-local%20SQLite%2FWAL-5B3FD8?style=flat-square" alt="Local SQLite WAL storage">
+</p>
 
 Taskfleet turns tasks collected by any agent from Fibery, Jira, ClickUp,
 Monday.com, or another source into a safe multi-agent execution queue. One task
@@ -15,25 +24,62 @@ gates.
 
 It is a standalone product. It has no dependency on AeroFortress, NYA, RTW, a
 specific tracker, or a specific coding agent. Any of them can compose with it
-through JSON, MCP, Git, and ordinary commands.
+through JSON, MCP, Git, and ordinary commands. The command is `taskfleet`;
+repository policy lives in `taskfleet.toml`, while disposable operational state
+lives in `.taskfleet/state.sqlite`.
 
-## Why it exists
+<table>
+<tr><td><b>One store, many boards</b></td><td>Saved structured views project the same tasks without duplication.</td></tr>
+<tr><td><b>Safe multi-agent work</b></td><td>Atomic claims, bounded leases, heartbeats, dependencies, and reconciliation coordinate workers.</td></tr>
+<tr><td><b>Repository-owned policy</b></td><td>Ordered workflows may require command or approval gates before every step.</td></tr>
+<tr><td><b>Isolated implementation</b></td><td>Deterministic Git branches and worktrees keep concurrent tasks separated.</td></tr>
+<tr><td><b>Proven consolidation</b></td><td>Candidate branches merge sequentially and gates run again on the combined tree.</td></tr>
+<tr><td><b>Tracker and agent independent</b></td><td>Arbitrary source metadata enters through stable JSON contracts exposed equally by CLI and MCP.</td></tr>
+</table>
 
-Human kanban tools display cards. Taskfleet gives agents the operations and
-invariants required to execute them:
+---
 
-| Need | Taskfleet contract |
-| --- | --- |
-| One database, several platform boards | Saved structured views; no duplicated tasks |
-| Many workers | Atomic claims, bounded leases, heartbeats, reconciliation |
-| Ordered work | Dependency-aware readiness and integration |
-| Different task shapes | Stable core fields plus arbitrary `source` and `meta` JSON |
-| Repository policy | Command or approval gates on every workflow step |
-| Isolated implementation | Deterministic Git branches and worktrees |
-| Safe consolidation | Sequential merges with gates re-run on the combined tree |
-| Any harness | Equivalent CLI and local stdio MCP tools |
+## Quick install with your agent
 
-## Install
+Copy this prompt into any coding agent with terminal access:
+
+```text
+Set up Taskfleet in this Git repository.
+
+Download the latest stable binary for this machine from
+https://github.com/lucasrgt/taskfleet/releases and verify its published
+SHA256SUMS entry. Use no third-party package and do not build from source.
+
+Install `taskfleet` in a user-local PATH location without administrator access
+or adding runtime dependencies to the repository. Confirm with
+`taskfleet --version`.
+
+At the repository root, run `taskfleet init` and preserve existing content.
+Inspect the repository's real task metadata and quality commands before editing
+`taskfleet.toml`. Configure only useful saved views, routes, workflow steps, and
+per-step gates. Reuse the repository's own gates; do not weaken or replace them.
+Keep credentials and tracker-specific SDK configuration outside Taskfleet.
+
+Validate the configuration with:
+taskfleet view.list --input '{}'
+
+If an authenticated tracker or connector is already available, normalize its
+tasks through `task.ingest` using stable provider URIs. Do not invent, delete,
+or mutate remote tracker tasks.
+
+Do not commit, push, or modify unrelated files. Report the installed version,
+changed files, configured views and gates, and any action still required.
+```
+
+### Manual installation
+
+Download the archive for your operating system and architecture from
+[GitHub Releases](https://github.com/lucasrgt/taskfleet/releases), verify it
+against `SHA256SUMS`, and place `taskfleet` (or `taskfleet.exe`) in your `PATH`.
+
+```bash
+taskfleet --version
+```
 
 Build from source with the stable Rust toolchain:
 
@@ -44,7 +90,9 @@ cargo install --git https://github.com/lucasrgt/taskfleet --locked
 Taskfleet is one native binary. It needs Git, but no daemon, hosted account,
 Node.js runtime, Python runtime, or tracker SDK.
 
-## Five-minute agent loop
+---
+
+## Getting started
 
 Initialize a repository:
 
