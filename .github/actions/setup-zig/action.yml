@@ -1,0 +1,27 @@
+name: Set up Zig
+description: Install the pinned official Zig binary without a Node action runtime
+runs:
+  using: composite
+  steps:
+    - name: Install Zig 0.16.0
+      shell: bash
+      run: |
+        case "$RUNNER_ARCH" in
+          X64)
+            url="https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz"
+            sha="70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00"
+            ;;
+          ARM64)
+            url="https://ziglang.org/download/0.16.0/zig-aarch64-linux-0.16.0.tar.xz"
+            sha="ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17"
+            ;;
+          *) echo "Unsupported runner architecture: $RUNNER_ARCH" >&2; exit 1 ;;
+        esac
+        archive="$RUNNER_TEMP/zig-0.16.0-$RUNNER_ARCH.tar.xz"
+        install="$RUNNER_TEMP/zig-0.16.0-$RUNNER_ARCH"
+        curl --fail --location --retry 3 "$url" --output "$archive"
+        printf '%s  %s\n' "$sha" "$archive" | sha256sum --check --status
+        mkdir "$install"
+        tar -xJf "$archive" -C "$install" --strip-components=1
+        "$install/zig" version
+        echo "$install" >> "$GITHUB_PATH"

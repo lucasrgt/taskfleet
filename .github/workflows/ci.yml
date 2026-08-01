@@ -11,7 +11,7 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, llvm-tools-preview, rustfmt
@@ -43,14 +43,12 @@ jobs:
             target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - uses: mlugg/setup-zig@v2
+      - uses: ./.github/actions/setup-zig
         if: runner.os == 'Linux'
-        with:
-          version: 0.16.0
       - uses: taiki-e/install-action@v2
         if: runner.os == 'Linux'
         with:
