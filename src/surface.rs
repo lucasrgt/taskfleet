@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::service::{Service, init};
+use crate::{location, service::Service};
 
 #[rustfmt::skip]
 const METHODS: &[(&str, &str, &[&str])] = &[
@@ -33,26 +33,37 @@ const METHODS: &[(&str, &str, &[&str])] = &[
 
 pub fn run_cli_at(args: Vec<OsString>, current: &Path, input: &mut dyn Read, output: &mut dyn Write) -> Result<i32> {
     let mut args = args.into_iter().skip(1).map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>();
-    let config = take_option(&mut args, "--config")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| current.join("taskfleet.toml"));
+    let explicit = take_option(&mut args, "--config").map(PathBuf::from);
+    let home = take_option(&mut args, "--state-home").map(PathBuf::from);
     let inline = take_option(&mut args, "--input");
     let method = args.first().map(String::as_str).unwrap_or("help");
     match method {
         "help" | "--help" | "-h" => writeln!(
             output,
-            "taskfleet <method> [--config PATH] [--input JSON]\nmethods: init, mcp, methods, {}",
+            "taskfleet <method> [--config PATH] [--input JSON]\nmethods: init, locate, external <enable|disable|purge>, mcp, methods, {}",
             METHODS.iter().map(|item| item.0).collect::<Vec<_>>().join(", ")
         )?,
         "--version" | "-V" => writeln!(output, "taskfleet {}", env!("CARGO_PKG_VERSION"))?,
         "init" => {
-            init(&config)?;
+            let config = explicit.clone().unwrap_or_else(|| current.join("taskfleet.toml"));
+            if config.exists() {
+                bail!("config already exists: {}", config.display());
+            }
+            std::fs::write(&config, include_str!("../assets/taskfleet.example.toml"))?;
             writeln!(output, "{}", json!({"config":config,"initialized":true}))?;
         }
-        "methods" => writeln!(output, "{}", serde_json::to_string_pretty(&tools())?)?,
+        "locate" => write_json(output, &location::locate(current, explicit.as_deref(), home.as_deref())?)?,
+        "external" => write_json(
+            output,
+            &location::manage(current, home.as_deref(), args.get(1).map(String::as_str).unwrap_or("status"))?,
+        )?,
+        "methods" => write_json(output, &tools())?,
         "mcp" => {
-            let mut reader = io::BufReader::new(input);
-            mcp_stream(&config, &mut reader, output)?;
+            let location = location::locate(current, explicit.as_deref(), home.as_deref())?;
+            if !location.enabled {
+                bail!("Taskfleet is not enabled; run `taskfleet external enable`");
+            }
+            mcp_stream(&location.config, &mut io::BufReader::new(input), output)?;
         }
         method if METHODS.iter().any(|item| item.0 == method) => {
             let value = match inline {
@@ -63,7 +74,11 @@ pub fn run_cli_at(args: Vec<OsString>, current: &Path, input: &mut dyn Read, out
                     if text.trim().is_empty() { json!({}) } else { serde_json::from_str(&text)? }
                 }
             };
-            writeln!(output, "{}", serde_json::to_string_pretty(&Service::open(&config)?.call(method, &value)?)?)?;
+            let location = location::locate(current, explicit.as_deref(), home.as_deref())?;
+            if !location.enabled {
+                bail!("Taskfleet is not enabled; run `taskfleet external enable`");
+            }
+            write_json(output, &Service::open(&location.config)?.call(method, &value)?)?;
         }
         method => bail!("unknown method {method}"),
     }
@@ -111,6 +126,11 @@ pub fn tools() -> Vec<Value> {
 }
 
 #[rustfmt::skip] fn optionals(method: &str) -> &'static [&'static str] { match method { "task.query" => &["view","filter","states","ready","full","limit"], "task.claim" => &["view","filter","limit","lease_seconds"], "task.heartbeat" => &["lease_seconds"], "task.cancel" => &["reason"], "worktree.prepare" => &["base"], "gate.approve" => &["note"], "integration.run" => &["view","filter","base","branch"], _ => &[] } }
+
+fn write_json(output: &mut dyn Write, value: &impl serde::Serialize) -> Result<()> {
+    writeln!(output, "{}", serde_json::to_string_pretty(value)?)?;
+    Ok(())
+}
 
 fn take_option(args: &mut Vec<String>, name: &str) -> Option<String> {
     let index = args.iter().position(|arg| arg == name)?;

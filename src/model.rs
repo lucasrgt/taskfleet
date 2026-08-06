@@ -7,176 +7,54 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct Config {
-    #[serde(default = "schema")]
-    pub schema: u32,
-    #[serde(default)]
-    pub project: Project,
-    #[serde(default, rename = "view")]
-    pub views: Vec<View>,
-    #[serde(default, rename = "workflow")]
-    pub workflows: Vec<Workflow>,
-    #[serde(default, rename = "gate")]
-    pub gates: Vec<Gate>,
-    #[serde(default, rename = "route")]
-    pub routes: Vec<Route>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct Project {
-    #[serde(default = "dot")]
-    pub repository: PathBuf,
-    #[serde(default = "database")]
-    pub database: PathBuf,
-    #[serde(default = "worktrees")]
-    pub worktree_root: PathBuf,
-    pub default_workflow: Option<String>,
-}
-
-impl Default for Project {
-    fn default() -> Self {
-        Self {
-            repository: dot(),
-            database: database(),
-            worktree_root: worktrees(),
-            default_workflow: None,
-        }
-    }
-}
-
+#[rustfmt::skip]
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct View {
-    pub id: String,
-    #[serde(default)]
-    pub filter: Filter,
-}
+pub struct Config { #[serde(default = "schema")] pub schema: u32, #[serde(default)] pub project: Project, #[serde(default, rename = "view")] pub views: Vec<View>, #[serde(default, rename = "workflow")] pub workflows: Vec<Workflow>, #[serde(default, rename = "gate")] pub gates: Vec<Gate>, #[serde(default, rename = "route")] pub routes: Vec<Route> }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct Workflow {
-    pub id: String,
-    #[serde(default, rename = "step")]
-    pub steps: Vec<Step>,
-}
-
+#[rustfmt::skip]
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Step {
-    pub id: String,
-    #[serde(default)]
-    pub title: String,
-    #[serde(default)]
-    pub gates: Vec<String>,
-}
+pub struct Project { #[serde(default = "dot")] pub repository: PathBuf, #[serde(default = "database")] pub database: PathBuf, #[serde(default = "worktrees")] pub worktree_root: PathBuf, pub default_workflow: Option<String> }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct Gate {
-    pub id: String,
-    #[serde(default = "command_kind")]
-    pub kind: String,
-    #[serde(default)]
-    pub command: Vec<String>,
-    #[serde(default = "gate_events")]
-    pub events: Vec<String>,
-    #[serde(default)]
-    pub when: Filter,
-    #[serde(default = "timeout")]
-    pub timeout_seconds: u64,
-    #[serde(default = "required")]
-    pub required: bool,
-}
+#[rustfmt::skip]
+impl Default for Project { fn default() -> Self { Self { repository: dot(), database: database(), worktree_root: worktrees(), default_workflow: None } } }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct Route {
-    pub workflow: String,
-    #[serde(default)]
-    pub when: Filter,
-}
+#[rustfmt::skip]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct View { pub id: String, #[serde(default)] pub filter: Filter }
 
+#[rustfmt::skip]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Workflow { pub id: String, #[serde(default, rename = "step")] pub steps: Vec<Step> }
+
+#[rustfmt::skip]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Step { pub id: String, #[serde(default)] pub title: String, #[serde(default)] pub gates: Vec<String> }
+
+#[rustfmt::skip]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Gate { pub id: String, #[serde(default = "command_kind")] pub kind: String, #[serde(default)] pub command: Vec<String>, #[serde(default = "gate_events")] pub events: Vec<String>, #[serde(default)] pub when: Filter, #[serde(default = "timeout")] pub timeout_seconds: u64, #[serde(default = "required")] pub required: bool }
+
+#[rustfmt::skip]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Route { pub workflow: String, #[serde(default)] pub when: Filter }
+
+#[rustfmt::skip]
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Filter {
-    #[default]
-    True,
-    Eq {
-        path: String,
-        value: Value,
-    },
-    Ne {
-        path: String,
-        value: Value,
-    },
-    Gt {
-        path: String,
-        value: Value,
-    },
-    Gte {
-        path: String,
-        value: Value,
-    },
-    Lt {
-        path: String,
-        value: Value,
-    },
-    Lte {
-        path: String,
-        value: Value,
-    },
-    Contains {
-        path: String,
-        value: Value,
-    },
-    In {
-        path: String,
-        values: Vec<Value>,
-    },
-    Exists {
-        path: String,
-    },
-    And {
-        args: Vec<Filter>,
-    },
-    Or {
-        args: Vec<Filter>,
-    },
-    Not {
-        arg: Box<Filter>,
-    },
+    #[default] True,
+    Eq { path: String, value: Value }, Ne { path: String, value: Value }, Gt { path: String, value: Value }, Gte { path: String, value: Value },
+    Lt { path: String, value: Value }, Lte { path: String, value: Value }, Contains { path: String, value: Value }, In { path: String, values: Vec<Value> },
+    Exists { path: String }, And { args: Vec<Filter> }, Or { args: Vec<Filter> }, Not { arg: Box<Filter> },
 }
 
+#[rustfmt::skip]
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Task {
-    pub uri: String,
-    pub title: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub tags: Vec<String>,
-    pub priority: Option<String>,
-    #[serde(default = "object")]
-    pub source: Value,
-    #[serde(default = "object")]
-    pub meta: Value,
-    #[serde(default)]
-    pub depends_on: Vec<String>,
-    pub workflow: Option<String>,
-}
+pub struct Task { pub uri: String, pub title: String, #[serde(default)] pub description: String, #[serde(default)] pub tags: Vec<String>, pub priority: Option<String>, #[serde(default = "object")] pub source: Value, #[serde(default = "object")] pub meta: Value, #[serde(default)] pub depends_on: Vec<String>, pub workflow: Option<String> }
 
+#[rustfmt::skip]
 #[derive(Clone, Debug, Serialize)]
-pub struct TaskRow {
-    #[serde(flatten)]
-    pub task: Task,
-    pub state: String,
-    pub paused: bool,
-    pub queue_priority: i64,
-    pub active_workflow: Option<String>,
-    pub step: usize,
-    pub owner: Option<String>,
-    pub lease_until: Option<i64>,
-    pub branch: Option<String>,
-    pub worktree: Option<String>,
-    pub error: Option<String>,
-    pub revision: u64,
-}
+pub struct TaskRow { #[serde(flatten)] pub task: Task, pub state: String, pub paused: bool, pub queue_priority: i64, pub active_workflow: Option<String>, pub step: usize, pub owner: Option<String>, pub lease_until: Option<i64>, pub branch: Option<String>, pub worktree: Option<String>, pub error: Option<String>, pub revision: u64 }
 
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
@@ -233,14 +111,7 @@ impl Config {
                 .find(|item| item.id == id)
                 .cloned()
                 .ok_or_else(|| anyhow::anyhow!("unknown workflow {id}")),
-            None => Ok(Workflow {
-                id: "implicit".into(),
-                steps: vec![Step {
-                    id: "execute".into(),
-                    title: "Execute".into(),
-                    gates: vec![],
-                }],
-            }),
+            None => Ok(implicit_workflow()),
         }
     }
 
@@ -297,6 +168,7 @@ fn compare(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
     }
 }
 
+#[rustfmt::skip] fn implicit_workflow() -> Workflow { Workflow { id: "implicit".into(), steps: vec![Step { id: "execute".into(), title: "Execute".into(), gates: vec![] }] } }
 #[rustfmt::skip] fn absolute(base: &Path, path: &Path) -> PathBuf { if path.is_absolute() { path.into() } else { base.join(path) } }
 #[rustfmt::skip] fn schema() -> u32 { 1 }
 #[rustfmt::skip] fn dot() -> PathBuf { ".".into() }

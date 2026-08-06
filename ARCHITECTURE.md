@@ -97,6 +97,14 @@ undo a Git commit that has already won the race with its database transition.
 
 ## Persistence and recovery
 
+Configuration discovery is owned by the Rust surface: explicit `--config`, the
+nearest ancestor `taskfleet.toml`, then a canonical Git-root external enrollment.
+External mode stores its generated config, SQLite database, worktrees, and an
+enablement marker under the platform state directory; it creates no repository
+files. Disable removes only the marker. Purge is rejected while enabled and
+removes only that repository's external state before pruning Git worktree
+metadata.
+
 SQLite runs in WAL mode. Task ingestion, dependency replacement, cycle checks,
 claims, receipts, and transitions use transactions. A receipt includes task,
 step, gate, Git tree, verdict, output, and timestamp. Changing the tree makes a

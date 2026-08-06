@@ -28,7 +28,9 @@ test("board projects every operational column deterministically", () => {
 });
 
 test("board renders within terminal width", () => {
-  const snapshot: FleetSnapshot = { at: 1, view: "all", cards: [card("running", { title: "x".repeat(100), owner: "worker" }), card("done")] };
+  const snapshot: FleetSnapshot = { at: 1, view: "all", location: { mode: "external", repository: "/repo", config: "/state/taskfleet.toml", state: "/state", enabled: true }, cards: [card("running", { title: "x".repeat(100), owner: "worker" }), card("done")] };
+  assert.match(renderBoard(snapshot, 80)[0], /EXTERNAL/);
+  assert.match(statusLine(snapshot), /TF external/);
   for (const width of [24, 80, 140]) {
     const lines = renderBoard(snapshot, width);
     assert.ok(lines.length > 2);

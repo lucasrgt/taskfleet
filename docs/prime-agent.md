@@ -20,13 +20,12 @@ prime-agent package install /absolute/path/to/taskfleet/integrations/prime-agent
 ```
 
 Release archives contain the same package in `prime-agent/`. Use `/reload` after
-installing into an active session, or start a new session. Prime should run from
-the project containing `taskfleet.toml`. The TypeScript extension resolves configuration in this order: Prime flags
-`--taskfleet-config`/`--taskfleet-bin`, then `TASKFLEET_CONFIG`/`TASKFLEET_BIN`,
-then the nearest `taskfleet.toml` and `taskfleet` on `PATH`. The Python skill
-runs in a separate process and reads the environment (falling back to
-`taskfleet.toml` in its working directory), so use the environment variables
-when both adapters must share an explicit non-default path.
+installing into an active session, or start a new session. Both adapters ask the
+Rust CLI to locate configuration. Precedence is an explicit Prime flag or
+`TASKFLEET_CONFIG`, the nearest ancestor `taskfleet.toml`, then an enabled
+external enrollment. `TASKFLEET_BIN` overrides `taskfleet` on `PATH`. Use the
+environment rather than a Prime-only flag when both the extension and Python
+skill need an explicit binary or configuration.
 
 ## Model-facing MCP skill
 
@@ -48,6 +47,9 @@ Taskfleet deliberately does not spawn models.
 ## Operator commands and Kanban
 
 ```text
+/fleet enable external
+/fleet disable
+/fleet purge
 /fleet status [task]
 /fleet board [on|off|refresh] [view]
 /fleet pause <task>
@@ -70,6 +72,32 @@ makes backlog work claimable again; it does not spawn a replacement worker.
 Cancellation is terminal and also retains Git artifacts for audit. Retry and
 priority call their dedicated Rust methods; controls are not aliases for another
 transition.
+
+
+## External mode
+
+The user-installed Prime package may load in every project, but startup discovery
+is read-only. A project without a local config or prior enrollment stays silent.
+To opt one Git repository in without changing its files:
+
+```text
+/fleet enable external
+```
+
+The Rust core canonicalizes the Git root and stores `taskfleet.toml`,
+`state.sqlite`, `worktrees/`, and an enrollment marker below
+`$TASKFLEET_STATE_HOME/projects/<repository-id>/`. The default state home follows
+the platform (`$XDG_STATE_HOME/taskfleet`, `~/.local/state/taskfleet`, or
+`%LOCALAPPDATA%/Taskfleet`). The UI labels this mode `EXTERNAL`; the Python skill
+uses the same core locator and exact returned config.
+
+`/fleet disable` is reversible: it removes only the marker and immediately
+stops polling while retaining history and worktrees. `/fleet enable external`
+restores the same state. `/fleet purge` is irreversible, requires interactive
+confirmation, and is rejected until external mode is disabled. It deletes only
+the external Taskfleet directory and prunes stale Git worktree metadata; normal
+repository files and branches are not deleted. A local config shadows any
+external enrollment.
 
 ## Associated Prime child cancellation
 

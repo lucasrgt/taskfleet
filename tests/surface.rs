@@ -142,3 +142,130 @@ fn control_tools_publish_exact_machine_readable_schemas() {
     let cancel = tools.iter().find(|tool| tool["name"] == "taskfleet_task_cancel").unwrap();
     assert_eq!(cancel["inputSchema"]["properties"]["reason"]["type"], "string");
 }
+
+#[test]
+fn external_mode_is_opt_in_reversible_and_leaves_the_repository_clean() {
+    let fixture = Fixture::new("");
+    std::fs::remove_file(&fixture.config).unwrap();
+    let home = fixture.temp.path().join("external-state");
+    let home = home.to_str().unwrap();
+    assert_eq!(common::run(&fixture.repo, &["status", "--porcelain"]), "");
+    let inside = fixture.repo.join("hidden");
+    let error = cli(&fixture.repo, &["locate", "--state-home", inside.to_str().unwrap()], "").unwrap_err();
+    assert!(error.to_string().contains("outside the repository"));
+    #[cfg(unix)]
+    {
+        let link = fixture.temp.path().join("state-link");
+        std::os::unix::fs::symlink(&fixture.repo, &link).unwrap();
+        let error = cli(&fixture.repo, &["locate", "--state-home", link.to_str().unwrap()], "").unwrap_err();
+        assert!(error.to_string().contains("outside the repository"));
+    }
+
+    let initial: Value = serde_json::from_str(&cli(&fixture.repo, &["locate", "--state-home", home], "").unwrap()).unwrap();
+    assert_eq!(initial["mode"], "external");
+    assert_eq!(initial["enabled"], false);
+    assert!(!initial["config"].as_str().is_some_and(|path| std::path::Path::new(path).exists()));
+    let lock_path = std::path::Path::new(initial["state"].as_str().unwrap()).with_extension("lock");
+    std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)
+        .unwrap();
+    held.lock().unwrap();
+    let (repository, external_home) = (fixture.repo.clone(), std::path::PathBuf::from(home));
+    let waiting = std::thread::spawn(move || taskfleet::location::manage(&repository, Some(&external_home), "disable"));
+    std::thread::sleep(std::time::Duration::from_millis(25));
+    assert!(!waiting.is_finished(), "external lifecycle lock was not exclusive");
+    drop(held);
+    waiting.join().unwrap().unwrap();
+
+    let enabled: Value = serde_json::from_str(&cli(&fixture.repo, &["external", "enable", "--state-home", home], "").unwrap()).unwrap();
+    assert_eq!(enabled["enabled"], true);
+    assert_eq!(enabled["changed"], true);
+    assert!(std::path::Path::new(enabled["config"].as_str().unwrap()).exists());
+    let nested = fixture.repo.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    let nested_location: Value = serde_json::from_str(&cli(&nested, &["locate", "--state-home", home], "").unwrap()).unwrap();
+    assert_eq!(nested_location["config"], enabled["config"]);
+    assert_eq!(common::run(&fixture.repo, &["status", "--porcelain"]), "");
+
+    let input = json!({"tasks":[task("task://external", "External", "x")]}).to_string();
+    cli(&fixture.repo, &["task.ingest", "--state-home", home, "--input", &input], "").unwrap();
+    let query: Value = serde_json::from_str(&cli(&fixture.repo, &["task.query", "--state-home", home], "").unwrap()).unwrap();
+    assert_eq!(query[0]["uri"], "task://external");
+
+    let disabled: Value = serde_json::from_str(&cli(&fixture.repo, &["external", "disable", "--state-home", home], "").unwrap()).unwrap();
+    assert_eq!(disabled["enabled"], false);
+    assert!(cli(&fixture.repo, &["task.query", "--state-home", home], "").is_err());
+    cli(&fixture.repo, &["external", "enable", "--state-home", home], "").unwrap();
+    let restored: Value = serde_json::from_str(&cli(&fixture.repo, &["task.query", "--state-home", home], "").unwrap()).unwrap();
+    assert_eq!(restored[0]["uri"], "task://external");
+
+    cli(&fixture.repo, &["init"], "").unwrap();
+    let local: Value = serde_json::from_str(&cli(&fixture.repo, &["locate", "--state-home", home], "").unwrap()).unwrap();
+    assert_eq!(local["mode"], "local");
+    std::fs::remove_file(&fixture.config).unwrap();
+    assert!(cli(&fixture.repo, &["external", "purge", "--state-home", home], "").is_err());
+    cli(&fixture.repo, &["external", "disable", "--state-home", home], "").unwrap();
+    let purged: Value = serde_json::from_str(&cli(&fixture.repo, &["external", "purge", "--state-home", home], "").unwrap()).unwrap();
+    assert_eq!(purged["purged"], true);
+    assert!(!std::path::Path::new(purged["state"].as_str().unwrap()).exists());
+    assert_eq!(common::run(&fixture.repo, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn external_location_precedence_and_error_paths_are_explicit() {
+    let outside = tempfile::tempdir().unwrap();
+    let none = taskfleet::location::locate(outside.path(), None, None).unwrap();
+    assert_eq!((none.mode, none.enabled), ("none", false));
+    static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = ENV.lock().unwrap();
+    let fixture = Fixture::new("");
+    let nested = fixture.repo.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    let explicit = taskfleet::location::locate(&nested, Some(std::path::Path::new("../taskfleet.toml")), None).unwrap();
+    assert_eq!(explicit.mode, "local");
+    assert!(cli(&fixture.repo, &["help"], "").unwrap().contains("external <enable|disable|purge>"));
+
+    std::fs::remove_file(&fixture.config).unwrap();
+    let variables = ["TASKFLEET_STATE_HOME", "XDG_STATE_HOME", "LOCALAPPDATA", "HOME", "USERPROFILE"];
+    let saved = variables.map(std::env::var_os);
+    for name in variables {
+        unsafe {
+            std::env::remove_var(name);
+        }
+    }
+    for (index, name) in variables.into_iter().enumerate() {
+        let root = fixture.temp.path().join(format!("state-{index}"));
+        unsafe {
+            std::env::set_var(name, &root);
+        }
+        let located = taskfleet::location::locate(&fixture.repo, None, None).unwrap();
+        assert!(!located.enabled && located.state.unwrap().starts_with(&root));
+        unsafe {
+            std::env::remove_var(name);
+        }
+    }
+    assert!(taskfleet::location::locate(&fixture.repo, None, None).is_err());
+    for (name, value) in variables.into_iter().zip(saved) {
+        if let Some(value) = value {
+            unsafe {
+                std::env::set_var(name, value);
+            }
+        }
+    }
+
+    let home = fixture.temp.path().join("state");
+    let first = taskfleet::location::manage(&fixture.repo, Some(&home), "enable").unwrap();
+    let second = taskfleet::location::manage(&fixture.repo, Some(&home), "enable").unwrap();
+    assert_eq!((first.changed, second.changed), (Some(true), Some(false)));
+    assert!(taskfleet::location::manage(&fixture.repo, Some(&home), "unknown").is_err());
+    taskfleet::location::manage(&fixture.repo, Some(&home), "disable").unwrap();
+    assert_eq!(taskfleet::location::manage(&fixture.repo, Some(&home), "disable").unwrap().changed, Some(false));
+    taskfleet::location::manage(&fixture.repo, Some(&home), "purge").unwrap();
+    assert_eq!(taskfleet::location::manage(&fixture.repo, Some(&home), "purge").unwrap().purged, Some(false));
+    assert!(cli(&fixture.repo, &["mcp", "--state-home", home.to_str().unwrap()], "").is_err());
+}

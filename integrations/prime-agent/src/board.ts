@@ -46,7 +46,8 @@ export function renderBoard(snapshot: FleetSnapshot, width: number): string[] {
   const gap = " │ ";
   const columnWidth = Math.max(20, Math.floor((width - gap.length * (columnsPerRow - 1)) / columnsPerRow));
   const lines: string[] = [];
-  const title = `TASKFLEET${snapshot.view ? ` · ${snapshot.view}` : ""} · ${snapshot.cards.length} tasks`;
+  const mode = snapshot.location?.mode === "external" ? " · EXTERNAL" : "";
+  const title = `TASKFLEET${mode}${snapshot.view ? ` · ${snapshot.view}` : ""} · ${snapshot.cards.length} tasks`;
   lines.push(truncate(title, width).trimEnd());
   for (let start = 0; start < active.length; start += columnsPerRow) {
     const row = active.slice(start, start + columnsPerRow);
@@ -62,7 +63,7 @@ export function renderBoard(snapshot: FleetSnapshot, width: number): string[] {
 
 export function statusLine(snapshot: FleetSnapshot): string {
   const grouped = groupCards(snapshot);
-  return `TF ${grouped.ready.length} ready · ${grouped.running.length} running · ${grouped.paused.length} paused · ${grouped.blocked.length + grouped.failed.length} blocked`;
+  return `TF${snapshot.location?.mode === "external" ? " external" : ""} ${grouped.ready.length} ready · ${grouped.running.length} running · ${grouped.paused.length} paused · ${grouped.blocked.length + grouped.failed.length} blocked`;
 }
 
 export function snapshotText(snapshot: FleetSnapshot): string {

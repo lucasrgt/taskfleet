@@ -54,8 +54,19 @@ export interface FleetCard extends TaskSummary {
   gates: Array<{ id: string; required: boolean; status: string }>;
 }
 
+export interface FleetLocation {
+  mode: "none" | "local" | "external";
+  repository: string;
+  config: string;
+  state: string | null;
+  enabled: boolean;
+  changed?: boolean;
+  purged?: boolean;
+}
+
 export interface FleetSnapshot {
   at: number;
+  location?: FleetLocation;
   view?: string;
   cards: FleetCard[];
 }

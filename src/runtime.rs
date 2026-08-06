@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::json;
 use wait_timeout::ChildExt;
 
 use crate::model::{Gate, TaskRow};
@@ -25,7 +25,7 @@ pub struct GateResult {
 }
 
 pub fn prepare_worktree(repository: &Path, root: &Path, row: &TaskRow, base: Option<&str>) -> Result<(String, PathBuf)> {
-    ensure_git(repository)?;
+    git(repository, &["rev-parse", "--git-dir"])?;
     fs::create_dir_all(root)?;
     git(repository, &["worktree", "prune"])?;
     let name = {
@@ -124,10 +124,6 @@ pub fn git(path: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-pub fn ensure_git(path: &Path) -> Result<()> {
-    git(path, &["rev-parse", "--git-dir"]).map(|_| ())
-}
-
 pub fn hash(text: &str) -> u32 {
     text.bytes().fold(2_166_136_261, |hash, byte| (hash ^ u32::from(byte)).wrapping_mul(16_777_619))
 }
@@ -148,8 +144,4 @@ fn read(file: &mut fs::File) -> Result<String> {
     let mut text = String::new();
     file.take(65_536).read_to_string(&mut text)?;
     Ok(text)
-}
-
-pub fn gate_output(result: &GateResult) -> Value {
-    serde_json::to_value(result).unwrap_or(Value::Null)
 }

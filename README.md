@@ -309,6 +309,11 @@ Run `taskfleet methods` for machine-readable tool metadata.
 | `integration.run` | Merge candidates and re-run integration gates |
 | `reconcile` | Expire dead leases and prune worktree records |
 
+`taskfleet locate` resolves explicit, nearest-local, or external enrollment
+state without opening SQLite; outside Git it returns disabled `mode: "none"`.
+`taskfleet external enable|disable|purge` manage opt-in external enrollment and
+are host lifecycle commands, not MCP tools.
+
 `task.query` accepts `view`, `filter`, `states`, `ready`, `full`, and `limit`.
 `ready: true` means claimable now: unpaused backlog work with every dependency
 `done`. `task.claim` accepts the same selection fields plus `owner`,
@@ -346,6 +351,13 @@ adapter provides `/fleet` controls and an observational Kanban. Both call the
 Rust CLI and add no Taskfleet persistence, scheduling, or transition logic. See
 [Prime Agent integration](docs/prime-agent.md) for installation, child-binding
 limits, controls, and recovery.
+
+For an opt-in repository that must remain file-clean, `/fleet enable external`
+asks the Rust core to place its config, SQLite database, and worktrees in the
+platform state directory. `/fleet disable` preserves that state while removing
+the enrollment; `/fleet purge` requires confirmation after disable. Local
+`taskfleet.toml` files always take precedence, and never-enrolled projects remain
+inactive.
 
 The server implements MCP `2025-06-18` over newline-delimited stdio and exposes
 the CLI methods as `taskfleet_view_list`, `taskfleet_task_ingest`, and so on.

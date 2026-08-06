@@ -5,8 +5,10 @@ description: Operate a local Taskfleet task DAG, claims, leases, worktrees, gate
 
 # Taskfleet
 
-Set `TASKFLEET_CONFIG` to the repository's `taskfleet.toml`. Optionally set
-`TASKFLEET_BIN` when `taskfleet` is not on `PATH`.
+Taskfleet resolves an explicit `TASKFLEET_CONFIG`, the nearest ancestor
+`taskfleet.toml`, or an external enrollment created by the human command
+`/fleet enable external`. It never auto-enables an unconfigured repository.
+Optionally set `TASKFLEET_BIN` when `taskfleet` is not on `PATH`.
 
 Discover the packaged server contract before calling it:
 

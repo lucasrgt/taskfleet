@@ -1,54 +1,53 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { findConfig, TaskfleetClient } from "../src/client.ts";
-import type { Exec } from "../src/types.ts";
+import { TaskfleetHost } from "../src/client.ts";
+import type { Exec, FleetLocation } from "../src/types.ts";
 
-test("findConfig honors explicit paths and walks ancestors", () => {
+const location: FleetLocation = { mode: "external", repository: "/repo", config: "/state/taskfleet.toml", state: "/state", enabled: true };
+
+test("host delegates discovery and management to exact no-shell core commands", async () => {
   const root = mkdtempSync(join(tmpdir(), "taskfleet-prime-"));
-  const nested = join(root, "a", "b");
-  mkdirSync(nested, { recursive: true });
-  writeFileSync(join(root, "taskfleet.toml"), "schema=1\n");
-  assert.equal(findConfig(nested, undefined, {}), join(root, "taskfleet.toml"));
-  assert.equal(findConfig(nested, "custom.toml"), join(nested, "custom.toml"));
+  const calls: unknown[][] = [];
+  const exec: Exec = async (command, args, options) => {
+    calls.push([command, args, options]);
+    return { code: 0, killed: false, stderr: "", stdout: JSON.stringify(location) };
+  };
+  const host = new TaskfleetHost({ cwd: root, config: "custom.toml", binary: "/opt/taskfleet", exec });
+  assert.deepEqual(await host.locate(), location);
+  await host.external("enable");
+  assert.deepEqual(calls, [
+    ["/opt/taskfleet", ["locate", "--config", join(root, "custom.toml")], { cwd: root, timeout: 10_000, signal: undefined }],
+    ["/opt/taskfleet", ["external", "enable"], { cwd: root, timeout: 10_000, signal: undefined }],
+  ]);
 });
 
-test("client executes exact no-shell Taskfleet CLI contract", async () => {
-  const root = mkdtempSync(join(tmpdir(), "taskfleet-prime-"));
-  const config = join(root, "taskfleet.toml");
-  writeFileSync(config, "schema=1\n");
+test("located config is forwarded exactly to operational calls", async () => {
   const calls: unknown[][] = [];
   const exec: Exec = async (command, args, options) => {
     calls.push([command, args, options]);
     return { code: 0, killed: false, stderr: "", stdout: JSON.stringify({ ok: true }) };
   };
-  const client = new TaskfleetClient({ cwd: root, config, binary: "/opt/taskfleet", exec });
+  const client = new TaskfleetHost({ cwd: "/repo", exec, binary: "/opt/taskfleet" }).client(location);
   assert.deepEqual(await client.call("task.pause", { task: "task://one" }), { ok: true });
-  assert.deepEqual(calls[0], [
-    "/opt/taskfleet",
-    ["task.pause", "--config", config, "--input", '{"task":"task://one"}'],
-    { cwd: root, timeout: 10_000, signal: undefined },
-  ]);
+  assert.deepEqual(calls[0], ["/opt/taskfleet", ["task.pause", "--config", location.config, "--input", '{"task":"task://one"}'], { cwd: "/repo", timeout: 10_000, signal: undefined }]);
 });
 
-test("client bounds failures and rejects malformed JSON", async () => {
-  const root = mkdtempSync(join(tmpdir(), "taskfleet-prime-"));
-  const config = join(root, "taskfleet.toml");
-  writeFileSync(config, "schema=1\n");
+test("host bounds failures and rejects malformed locations", async () => {
   let exec: Exec = async () => ({ code: 1, killed: false, stdout: "", stderr: "x".repeat(3_000) });
-  let client = new TaskfleetClient({ cwd: root, config, exec });
-  await assert.rejects(client.call("task.query"), (error: Error) => error.message.length < 2_100);
+  let host = new TaskfleetHost({ cwd: "/repo", exec });
+  await assert.rejects(host.locate(), (error: Error) => error.message.length < 2_100);
   exec = async () => ({ code: 0, killed: false, stdout: "not-json", stderr: "" });
-  client = new TaskfleetClient({ cwd: root, config, exec });
-  await assert.rejects(client.call("task.query"), /invalid JSON/);
+  host = new TaskfleetHost({ cwd: "/repo", exec });
+  await assert.rejects(host.locate(), /invalid JSON/);
+  exec = async () => ({ code: 0, killed: false, stdout: JSON.stringify({ enabled: true }), stderr: "" });
+  host = new TaskfleetHost({ cwd: "/repo", exec });
+  await assert.rejects(host.locate(), /invalid location/);
 });
 
 test("snapshot enriches only active cards and keeps compact dependencies", async () => {
-  const root = mkdtempSync(join(tmpdir(), "taskfleet-prime-"));
-  const config = join(root, "taskfleet.toml");
-  writeFileSync(config, "schema=1\n");
   const methods: string[] = [];
   const exec: Exec = async (_command, args) => {
     methods.push(args[0]);
@@ -57,8 +56,9 @@ test("snapshot enriches only active cards and keeps compact dependencies", async
       : { task: { uri: "task://live", title: "Live", depends_on: [] }, execution: { state: "running", active_step: { id: "build" }, gates: [] } };
     return { code: 0, killed: false, stderr: "", stdout: JSON.stringify(output) };
   };
-  const snapshot = await new TaskfleetClient({ cwd: root, config, exec }).snapshot();
+  const snapshot = await new TaskfleetHost({ cwd: "/repo", exec }).client(location).snapshot();
   assert.deepEqual(methods, ["task.query", "task.get"]);
   assert.deepEqual(snapshot.cards[0].depends_on, ["task://dep"]);
   assert.equal(snapshot.cards[1].step_name, "build");
+  assert.equal(snapshot.location?.mode, "external");
 });

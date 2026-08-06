@@ -5,6 +5,16 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::model::{Task, TaskRow};
 
+#[rustfmt::skip]
+const CONTROLS: &[(&str, &str)] = &[
+    ("pause", "UPDATE task SET paused=1,state=CASE state WHEN 'running' THEN 'backlog' ELSE state END,owner=NULL,lease_until=NULL,revision=revision+1 WHERE uri=?1 AND state NOT IN ('done','cancelled') AND ?2 IS ?2 AND ?3 IS ?3"),
+    ("resume", "UPDATE task SET paused=0,revision=revision+1 WHERE uri=?1 AND paused=1 AND state NOT IN ('done','cancelled') AND ?2 IS ?2 AND ?3 IS ?3"),
+    ("cancel", "UPDATE task SET state='cancelled',paused=0,owner=NULL,lease_until=NULL,error=coalesce(?3,'cancelled'),revision=revision+1 WHERE uri=?1 AND state!='done' AND ?2 IS ?2"),
+    ("reprioritize", "UPDATE task SET queue_priority=?2,revision=revision+1 WHERE uri=?1 AND state NOT IN ('done','cancelled') AND ?2 IS ?2 AND ?3 IS ?3"),
+    ("block", "UPDATE task SET state='blocked',error=?3,revision=revision+1 WHERE uri=?1 AND paused=0 AND state NOT IN ('done','cancelled') AND ?2 IS ?2"),
+    ("retry", "UPDATE task SET state='backlog',owner=NULL,lease_until=NULL,error=NULL,revision=revision+1 WHERE uri=?1 AND paused=0 AND state='blocked' AND ?2 IS ?2 AND ?3 IS ?3"),
+];
+
 pub struct Store(pub Connection);
 
 impl Store {
@@ -118,27 +128,11 @@ impl Store {
     }
 
     pub fn control(&self, uri: &str, action: &str, number: Option<i64>, reason: Option<&str>) -> Result<()> {
-        let sql = match action {
-            "pause" => {
-                "UPDATE task SET paused=1,state=CASE state WHEN 'running' THEN 'backlog' ELSE state END,owner=NULL,lease_until=NULL,revision=revision+1 WHERE uri=?1 AND state NOT IN ('done','cancelled') AND ?2 IS ?2 AND ?3 IS ?3"
-            }
-            "resume" => {
-                "UPDATE task SET paused=0,revision=revision+1 WHERE uri=?1 AND paused=1 AND state NOT IN ('done','cancelled') AND ?2 IS ?2 AND ?3 IS ?3"
-            }
-            "cancel" => {
-                "UPDATE task SET state='cancelled',paused=0,owner=NULL,lease_until=NULL,error=coalesce(?3,'cancelled'),revision=revision+1 WHERE uri=?1 AND state!='done' AND ?2 IS ?2"
-            }
-            "reprioritize" => {
-                "UPDATE task SET queue_priority=?2,revision=revision+1 WHERE uri=?1 AND state NOT IN ('done','cancelled') AND ?2 IS ?2 AND ?3 IS ?3"
-            }
-            "block" => {
-                "UPDATE task SET state='blocked',error=?3,revision=revision+1 WHERE uri=?1 AND paused=0 AND state NOT IN ('done','cancelled') AND ?2 IS ?2"
-            }
-            "retry" => {
-                "UPDATE task SET state='backlog',owner=NULL,lease_until=NULL,error=NULL,revision=revision+1 WHERE uri=?1 AND paused=0 AND state='blocked' AND ?2 IS ?2 AND ?3 IS ?3"
-            }
-            _ => bail!("unknown control {action}"),
-        };
+        let sql = CONTROLS
+            .iter()
+            .find(|(name, _)| *name == action)
+            .map(|(_, sql)| *sql)
+            .with_context(|| format!("unknown control {action}"))?;
         if self.0.execute(sql, params![uri, number, reason])? != 1 {
             bail!("task cannot {action}: {uri}");
         }
@@ -162,10 +156,7 @@ impl Store {
     }
 
     pub fn expire(&self, now: i64) -> Result<usize> {
-        Ok(self.0.execute(
-            "UPDATE task SET state='backlog',owner=NULL,lease_until=NULL,error='lease expired',revision=revision+1 WHERE state='running' AND paused=0 AND lease_until < ?1",
-            [now],
-        )?)
+        Ok(self.0.execute("UPDATE task SET state='backlog',owner=NULL,lease_until=NULL,error='lease expired',revision=revision+1 WHERE state='running' AND paused=0 AND lease_until < ?1", [now])?)
     }
 }
 

@@ -1,3 +1,4 @@
+pub mod location;
 pub mod model;
 pub mod runtime;
 pub mod service;

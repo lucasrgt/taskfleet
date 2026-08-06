@@ -56,13 +56,7 @@ impl Service {
 
     fn query(&self, input: &Value) -> Result<Value> {
         let filter = self.filter(input)?;
-        let states = input["states"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
+        let states = strings(input, "states");
         let ready = input["ready"].as_bool().unwrap_or(false);
         let full = input["full"].as_bool().unwrap_or(false);
         let limit = input["limit"].as_u64().unwrap_or(50).clamp(1, 500) as usize;
@@ -172,7 +166,7 @@ impl Service {
             }
             json!({"gate":gate.id,"tree":tree,"ok":input["approved"].as_bool().unwrap_or(false),"approved_by":text(input,"by")?,"note":input["note"]})
         } else {
-            runtime::gate_output(&runtime::run_gate(gate, &row, cwd, &step.id, false)?)
+            serde_json::to_value(runtime::run_gate(gate, &row, cwd, &step.id, false)?)?
         };
         let ok = output["ok"].as_bool().unwrap_or(false);
         self.store
@@ -358,16 +352,6 @@ impl Service {
     }
 }
 
-fn text<'a>(value: &'a Value, name: &str) -> Result<&'a str> {
-    value[name].as_str().with_context(|| format!("missing {name}"))
-}
-fn now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64
-}
-pub fn init(path: &Path) -> Result<()> {
-    if path.exists() {
-        bail!("config already exists: {}", path.display());
-    }
-    fs::write(path, include_str!("../assets/taskfleet.example.toml"))?;
-    Ok(())
-}
+#[rustfmt::skip] fn text<'a>(value: &'a Value, name: &str) -> Result<&'a str> { value[name].as_str().with_context(|| format!("missing {name}")) }
+#[rustfmt::skip] fn strings(value: &Value, name: &str) -> Vec<String> { value[name].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect() }
+#[rustfmt::skip] fn now() -> i64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64 }

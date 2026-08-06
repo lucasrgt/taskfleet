@@ -32,9 +32,36 @@ the environment for explicit paths that must also reach the Python skill.
 
 Use `/reload` after installing into an active session.
 
+
+## External mode
+
+A globally installed package performs only read-only discovery. Projects with a
+nearest `taskfleet.toml` activate normally; all other projects remain silent
+until a person explicitly runs:
+
+```text
+/fleet enable external
+```
+
+The Rust core finds the enclosing Git repository and creates the configuration,
+SQLite database, and managed worktrees under
+`$TASKFLEET_STATE_HOME/projects/<repository-id>/`. Without that override it uses
+the platform state directory, such as `~/.local/state/taskfleet` on Linux. No
+file is created in the repository. The board and status line show `EXTERNAL`.
+
+`/fleet disable` removes only the enrollment marker and preserves all external
+state for a later re-enable. `/fleet purge` requires interactive confirmation,
+works only after disable, deletes that retained external state, and prunes stale
+Git worktree metadata. A local `taskfleet.toml` always shadows external mode.
+Configuration precedence is explicit flag/environment, nearest local config,
+then an enabled external enrollment.
+
 ## Commands
 
 ```text
+/fleet enable external
+/fleet disable
+/fleet purge
 /fleet status [task]
 /fleet board [on|off|refresh] [view]
 /fleet pause <task>

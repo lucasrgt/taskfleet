@@ -12,7 +12,9 @@
     "node": ">=22.8.0"
   },
   "scripts": {
-    "test": "tsx --test test/*.test.ts",
+    "test": "npm run test:ts && npm run test:python",
+    "test:ts": "tsx --test test/*.test.ts",
+    "test:python": "python3 -m unittest discover -s test-python",
     "typecheck": "tsc --noEmit"
   },
   "pi": {

@@ -60,9 +60,9 @@ persisted by Taskfleet.
    deterministically own subagents without the orchestrating model.
 6. At the time of this exercise, cancellation and Kanban controls were outside
    the normative v0.1 contract. The subsequent core contract added durable
-   cancellation, pause/resume, and operational queue priority in SQLite; the
-   Prime adapter only forwards those core methods. Tracker-specific code remains
-   absent. Typed
+   cancellation, pause/resume, operational queue priority, and opt-in external
+   project state; the Prime adapter only forwards those core contracts.
+   Tracker-specific code remains absent. Typed
    artifacts, progress history, and attempt ceilings remain excluded.
 7. Integration gate process-spawn errors still abort the integration call rather
    than being converted into a per-candidate red verdict. Normal nonzero exits,
