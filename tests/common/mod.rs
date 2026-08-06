@@ -21,6 +21,7 @@ impl Fixture {
         let repo = temp.path().join("repository");
         fs::create_dir(&repo).unwrap();
         run(&repo, &["init", "-b", "main"]);
+        run(&repo, &["config", "core.autocrlf", "false"]);
         run(&repo, &["config", "user.name", "Taskfleet Test"]);
         run(&repo, &["config", "user.email", "taskfleet@example.test"]);
         fs::write(repo.join("seed.txt"), "seed\n").unwrap();

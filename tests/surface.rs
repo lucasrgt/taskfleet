@@ -175,12 +175,17 @@ fn external_mode_is_opt_in_reversible_and_leaves_the_repository_clean() {
         .open(lock_path)
         .unwrap();
     held.lock().unwrap();
-    let (repository, external_home) = (fixture.repo.clone(), std::path::PathBuf::from(home));
-    let waiting = std::thread::spawn(move || taskfleet::location::manage(&repository, Some(&external_home), "disable"));
+    let mut waiting = std::process::Command::new(env!("CARGO_BIN_EXE_taskfleet"))
+        .current_dir(&fixture.repo)
+        .args(["external", "disable", "--state-home", home])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(25));
-    assert!(!waiting.is_finished(), "external lifecycle lock was not exclusive");
+    assert!(waiting.try_wait().unwrap().is_none(), "external lifecycle lock was not exclusive");
     drop(held);
-    waiting.join().unwrap().unwrap();
+    assert!(waiting.wait().unwrap().success());
 
     let enabled: Value = serde_json::from_str(&cli(&fixture.repo, &["external", "enable", "--state-home", home], "").unwrap()).unwrap();
     assert_eq!(enabled["enabled"], true);
