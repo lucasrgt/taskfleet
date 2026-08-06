@@ -159,6 +159,33 @@ fn external_manage_lock_probe() {
 }
 
 #[test]
+#[ignore]
+fn external_state_environment_probe() {
+    let Some(repository) = std::env::var_os("TASKFLEET_ENV_PROBE_REPOSITORY") else {
+        return;
+    };
+    let root = std::path::PathBuf::from(std::env::var_os("TASKFLEET_ENV_PROBE_ROOT").unwrap());
+    let variables = ["TASKFLEET_STATE_HOME", "XDG_STATE_HOME", "LOCALAPPDATA", "HOME", "USERPROFILE"];
+    for name in variables {
+        unsafe {
+            std::env::remove_var(name);
+        }
+    }
+    for (index, name) in variables.into_iter().enumerate() {
+        let expected = root.join(format!("state-{index}"));
+        unsafe {
+            std::env::set_var(name, &expected);
+        }
+        let located = taskfleet::location::locate(std::path::Path::new(&repository), None, None).unwrap();
+        assert!(!located.enabled && located.state.unwrap().starts_with(&expected));
+        unsafe {
+            std::env::remove_var(name);
+        }
+    }
+    assert!(taskfleet::location::locate(std::path::Path::new(&repository), None, None).is_err());
+}
+
+#[test]
 fn external_mode_is_opt_in_reversible_and_leaves_the_repository_clean() {
     let fixture = Fixture::new("");
     std::fs::remove_file(&fixture.config).unwrap();
@@ -257,8 +284,6 @@ fn external_location_precedence_and_error_paths_are_explicit() {
     let outside = tempfile::tempdir().unwrap();
     let none = taskfleet::location::locate(outside.path(), None, None).unwrap();
     assert_eq!((none.mode, none.enabled), ("none", false));
-    static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = ENV.lock().unwrap();
     let fixture = Fixture::new("");
     let nested = fixture.repo.join("nested");
     std::fs::create_dir(&nested).unwrap();
@@ -267,32 +292,15 @@ fn external_location_precedence_and_error_paths_are_explicit() {
     assert!(cli(&fixture.repo, &["help"], "").unwrap().contains("external <enable|disable|purge>"));
 
     std::fs::remove_file(&fixture.config).unwrap();
-    let variables = ["TASKFLEET_STATE_HOME", "XDG_STATE_HOME", "LOCALAPPDATA", "HOME", "USERPROFILE"];
-    let saved = variables.map(std::env::var_os);
-    for name in variables {
-        unsafe {
-            std::env::remove_var(name);
-        }
-    }
-    for (index, name) in variables.into_iter().enumerate() {
-        let root = fixture.temp.path().join(format!("state-{index}"));
-        unsafe {
-            std::env::set_var(name, &root);
-        }
-        let located = taskfleet::location::locate(&fixture.repo, None, None).unwrap();
-        assert!(!located.enabled && located.state.unwrap().starts_with(&root));
-        unsafe {
-            std::env::remove_var(name);
-        }
-    }
-    assert!(taskfleet::location::locate(&fixture.repo, None, None).is_err());
-    for (name, value) in variables.into_iter().zip(saved) {
-        if let Some(value) = value {
-            unsafe {
-                std::env::set_var(name, value);
-            }
-        }
-    }
+    let environment = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored", "--exact", "external_state_environment_probe"])
+        .env("TASKFLEET_ENV_PROBE_REPOSITORY", &fixture.repo)
+        .env("TASKFLEET_ENV_PROBE_ROOT", fixture.temp.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(environment.success());
 
     let home = fixture.temp.path().join("state");
     let first = taskfleet::location::manage(&fixture.repo, Some(&home), "enable").unwrap();
