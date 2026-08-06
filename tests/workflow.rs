@@ -116,6 +116,8 @@ when = { op="true" }
         service.call("task.get", &json!({"task":"task://red"})).unwrap()["execution"]["state"],
         "blocked"
     );
+    assert!(service.call("gate.run", &json!({"task":"task://red","gate":"red"})).is_err());
+    assert!(service.call("step.advance", &json!({"task":"task://red","owner":"agent"})).is_err());
     service.call("task.retry", &json!({"task":"task://red"})).unwrap();
 }
 
@@ -258,4 +260,55 @@ when = { op="true" }
         service.call("step.advance", &json!({"task":"task://one","owner":"agent"})).unwrap()["state"],
         "candidate"
     );
+}
+
+#[test]
+fn reopened_service_preserves_claim_workspace_and_gate_receipt() {
+    let fixture = Fixture::new(WORKFLOW);
+    let mut service = fixture.service();
+    ingest(&mut service, vec![task("task://restart", "Restart", "x")]);
+    service.call("task.claim", &json!({"owner":"agent"})).unwrap();
+    let workspace = service.call("worktree.prepare", &json!({"task":"task://restart"})).unwrap();
+    commit(Path::new(workspace["worktree"].as_str().unwrap()), "restart.txt", "durable\n");
+    service.call("gate.run", &json!({"task":"task://restart","gate":"clean"})).unwrap();
+    drop(service);
+
+    let mut service = fixture.service();
+    let status = service.call("task.get", &json!({"task":"task://restart"})).unwrap();
+    assert_eq!(status["execution"]["owner"], "agent");
+    assert_eq!(status["execution"]["branch"], workspace["branch"]);
+    assert_eq!(status["execution"]["gates"][0]["status"], "green");
+    service.call("step.advance", &json!({"task":"task://restart","owner":"agent"})).unwrap();
+}
+
+#[test]
+fn merge_conflict_blocks_only_that_candidate_and_later_candidates_continue() {
+    let fixture = Fixture::new("");
+    let mut service = fixture.service();
+    ingest(
+        &mut service,
+        vec![
+            task("task://a", "First", "x"),
+            task("task://b", "Conflict", "x"),
+            task("task://c", "Later", "x"),
+        ],
+    );
+    let claimed = service.call("task.claim", &json!({"owner":"fleet","limit":3})).unwrap();
+    for row in claimed.as_array().unwrap() {
+        let uri = row["task"]["uri"].as_str().unwrap();
+        let workspace = service.call("worktree.prepare", &json!({"task":uri})).unwrap();
+        let path = Path::new(workspace["worktree"].as_str().unwrap());
+        match uri {
+            "task://a" => commit(path, "seed.txt", "first\n"),
+            "task://b" => commit(path, "seed.txt", "conflict\n"),
+            _ => commit(path, "later.txt", "later\n"),
+        }
+        service.call("step.advance", &json!({"task":uri,"owner":"fleet"})).unwrap();
+    }
+    let integrated = service.call("integration.run", &json!({})).unwrap();
+    assert_eq!(integrated["merged"], json!(["task://a", "task://c"]));
+    assert_eq!(integrated["blocked"], json!(["task://b"]));
+    let path = Path::new(integrated["worktree"].as_str().unwrap());
+    assert_eq!(std::fs::read_to_string(path.join("seed.txt")).unwrap(), "first\n");
+    assert!(path.join("later.txt").exists());
 }

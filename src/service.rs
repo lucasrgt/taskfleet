@@ -126,6 +126,9 @@ impl Service {
 
     fn gate(&self, input: &Value, approval: bool) -> Result<Value> {
         let row = self.store.get(text(input, "task")?)?;
+        if row.state != "running" {
+            bail!("only running tasks can execute gates");
+        }
         let workflow = self.config.workflow(row.active_workflow.as_deref())?;
         let step = workflow.steps.get(row.step).context("task has no active step")?;
         let gate = self.gate_for(step, text(input, "gate")?, &row)?;
@@ -154,8 +157,8 @@ impl Service {
 
     fn advance(&self, input: &Value) -> Result<Value> {
         let row = self.store.get(text(input, "task")?)?;
-        if row.owner.as_deref() != Some(text(input, "owner")?) {
-            bail!("task is not owned by this worker");
+        if row.state != "running" || row.owner.as_deref() != Some(text(input, "owner")?) {
+            bail!("task is not running or owned by this worker");
         }
         let workflow = self.config.workflow(row.active_workflow.as_deref())?;
         let step = workflow.steps.get(row.step).context("task has no active step")?;

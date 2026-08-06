@@ -47,7 +47,9 @@ fn mcp_advertises_and_calls_the_same_core() {
         .unwrap();
     assert_eq!(query["inputSchema"]["properties"]["filter"]["type"], "object");
     assert_eq!(query["inputSchema"]["properties"]["limit"]["type"], "integer");
-    assert_eq!(responses[3]["result"]["structuredContent"][0]["uri"], "task://mcp");
+    let query: Value = serde_json::from_str(responses[3]["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(query[0]["uri"], "task://mcp");
+    assert!(responses[3]["result"].get("structuredContent").is_none());
     assert_eq!(responses[4]["error"]["code"], -32601);
 }
 

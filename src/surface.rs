@@ -101,7 +101,7 @@ pub fn mcp_stream(config: &Path, input: &mut dyn BufRead, output: &mut dyn Write
                 let name = request["params"]["name"].as_str().unwrap_or("");
                 let method = name.strip_prefix("taskfleet_").unwrap_or("").replace('_', ".");
                 match service.call(&method, &request["params"]["arguments"]) {
-                    Ok(value) => json!({"content":[{"type":"text","text":serde_json::to_string(&value)?}],"structuredContent":value}),
+                    Ok(value) => json!({"content":[{"type":"text","text":serde_json::to_string(&value)?}]}),
                     Err(error) => json!({"content":[{"type":"text","text":format!("{error:#}")}],"isError":true}),
                 }
             }

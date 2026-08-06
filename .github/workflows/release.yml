@@ -80,9 +80,11 @@ jobs:
         shell: pwsh
         run: |
           $name = "taskfleet-${{ matrix.target }}"
-          New-Item -ItemType Directory -Path "dist/$name" | Out-Null
+          New-Item -ItemType Directory -Path "dist/$name/prime-agent-skill", "dist/$name/docs" | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/taskfleet${{ matrix.suffix }}" "dist/$name/"
-          Copy-Item README.md, LICENSE "dist/$name/"
+          Copy-Item README.md, ARCHITECTURE.md, STABILIZATION.md, LICENSE "dist/$name/"
+          Copy-Item docs/prime-agent.md "dist/$name/docs/"
+          Copy-Item .prime/agent/skills/taskfleet "dist/$name/prime-agent-skill/taskfleet" -Recurse
           Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
       - uses: actions/upload-artifact@v7
         with:

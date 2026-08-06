@@ -2,3 +2,4 @@
 .taskfleet/
 .codegraph/
 
+__pycache__/

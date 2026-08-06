@@ -1,6 +1,10 @@
 mod common;
 
-use std::fs;
+use std::{
+    fs,
+    sync::{Arc, Barrier},
+    thread,
+};
 
 use serde_json::json;
 use taskfleet::model::{Config, Filter};
@@ -207,4 +211,38 @@ fn reconcile_expires_dead_owners_and_retry_is_explicit() {
     assert_eq!(service.call("task.get", &json!({"task":"task://1"})).unwrap()["execution"]["state"], "blocked");
     assert_eq!(service.call("task.retry", &json!({"task":"task://1"})).unwrap()["state"], "backlog");
     assert!(service.call("task.retry", &json!({"task":"task://1"})).is_err());
+}
+
+#[test]
+fn concurrent_services_do_not_duplicate_a_claim() {
+    let fixture = Fixture::new("");
+    let mut service = fixture.service();
+    ingest(&mut service, vec![task("task://race", "Race", "x")]);
+    drop(service);
+    let barrier = Arc::new(Barrier::new(2));
+    let handles = ["agent-a", "agent-b"].map(|owner| {
+        let config = fixture.config.clone();
+        let barrier = barrier.clone();
+        thread::spawn(move || {
+            let mut service = taskfleet::Service::open(&config).unwrap();
+            barrier.wait();
+            service.call("task.claim", &json!({"owner":owner})).map(|value| value.as_array().unwrap().len())
+        })
+    });
+    let outcomes = handles.into_iter().map(|handle| handle.join().unwrap()).collect::<Vec<_>>();
+    assert_eq!(outcomes.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(outcomes.into_iter().filter_map(Result::ok).sum::<usize>(), 1);
+}
+
+#[test]
+fn corrupt_database_fails_open_with_a_diagnostic() {
+    let fixture = Fixture::new("");
+    let database = fixture.repo.join(".taskfleet/state.sqlite");
+    fs::create_dir_all(database.parent().unwrap()).unwrap();
+    fs::write(&database, b"not a sqlite database").unwrap();
+    let error = match taskfleet::Service::open(&fixture.config) {
+        Ok(_) => panic!("corrupt database opened"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("database"));
 }

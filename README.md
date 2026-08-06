@@ -328,6 +328,13 @@ Generic MCP host configuration:
 }
 ```
 
+Prime Agent 0.7 currently mounts remote HTTP MCP integrations, not local stdio
+entries. Taskfleet release archives therefore include a thin Python-backed skill
+at `prime-agent-skill/taskfleet`; source checkouts keep it at
+`.prime/agent/skills/taskfleet`. It starts this same packaged MCP server and adds
+no Taskfleet business logic. See [Prime Agent integration](docs/prime-agent.md)
+for installation, verification, orchestration, and recovery.
+
 The server implements MCP `2025-06-18` over newline-delimited stdio and exposes
 the CLI methods as `taskfleet_view_list`, `taskfleet_task_ingest`, and so on.
 Tool errors are returned as structured MCP errors without terminating the
@@ -359,7 +366,8 @@ secret-handling policy. See [`SECURITY.md`](SECURITY.md) for reporting.
 ## Architecture and scope
 
 Read [`ARCHITECTURE.md`](ARCHITECTURE.md) for the normative state machine,
-receipt model, and integration behavior.
+receipt model, and integration behavior. The reproducible WSL/Prime exercise and
+remaining limitations are recorded in [`STABILIZATION.md`](STABILIZATION.md).
 
 | Taskfleet does | Taskfleet does not |
 | --- | --- |
