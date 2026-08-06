@@ -277,9 +277,12 @@ NYA, RTW, AVP, security scanners, deployment previews, or internal policy.
 ```
 
 Only `uri` and `title` are mandatory. `source` and `meta` preserve arbitrary
-tracker data without forcing Taskfleet to know provider schemas. Re-ingestion
+tracker data without forcing Taskfleet to know provider schemas. The dossier's
+string `priority` is imported provider content; Taskfleet's signed integer
+`execution.queue_priority` is separate operational ordering state. Re-ingestion
 of a URI updates its imported dossier while preserving runtime ownership,
-progress, branch, and receipts. Dependency cycles are rejected atomically.
+pause/cancellation state, queue priority, progress, branch, and receipts.
+Dependency cycles are rejected atomically.
 
 ## CLI methods
 
@@ -293,6 +296,10 @@ Run `taskfleet methods` for machine-readable tool metadata.
 | `task.get` | Read the full dossier, active step, tree, and gate status |
 | `task.claim` | Atomically lease ready tasks to one worker |
 | `task.heartbeat` | Extend a worker's lease |
+| `task.cancel` | Durably cancel non-completed work, with an optional reason |
+| `task.pause` | Hold non-completed work without losing progress |
+| `task.resume` | Release a paused task in its preserved lifecycle state |
+| `task.reprioritize` | Set the durable integer queue priority |
 | `worktree.prepare` | Create or recover the task branch and worktree |
 | `gate.run` | Execute and record a command gate |
 | `gate.approve` | Record an explicit approval decision |
@@ -303,9 +310,13 @@ Run `taskfleet methods` for machine-readable tool metadata.
 | `reconcile` | Expire dead leases and prune worktree records |
 
 `task.query` accepts `view`, `filter`, `states`, `ready`, `full`, and `limit`.
-`task.claim` accepts the same selection fields plus `owner`, `lease_seconds`,
-and a maximum `limit` of 32. Query results default to compact summaries; use
-`full: true` for complete dossiers.
+`ready: true` means claimable now: unpaused backlog work with every dependency
+`done`. `task.claim` accepts the same selection fields plus `owner`,
+`lease_seconds`, and a maximum `limit` of 32. Higher `queue_priority` values are
+returned and claimed first, with URI as the tie-break. `task.reprioritize`
+requires `task` and signed integer `priority`; `task.cancel` accepts optional
+`reason`. Query results default to compact summaries; use `full: true` for
+complete dossiers.
 
 ## MCP
 
@@ -328,12 +339,13 @@ Generic MCP host configuration:
 }
 ```
 
-Prime Agent 0.7 currently mounts remote HTTP MCP integrations, not local stdio
-entries. Taskfleet release archives therefore include a thin Python-backed skill
-at `prime-agent-skill/taskfleet`; source checkouts keep it at
-`.prime/agent/skills/taskfleet`. It starts this same packaged MCP server and adds
-no Taskfleet business logic. See [Prime Agent integration](docs/prime-agent.md)
-for installation, verification, orchestration, and recovery.
+Taskfleet also ships an optional native Prime Agent package at
+`integrations/prime-agent` (and `prime-agent/` in release archives). Its Python
+skill exposes this stdio MCP server to the model; its TypeScript `pi.extensions`
+adapter provides `/fleet` controls and an observational Kanban. Both call the
+Rust CLI and add no Taskfleet persistence, scheduling, or transition logic. See
+[Prime Agent integration](docs/prime-agent.md) for installation, child-binding
+limits, controls, and recovery.
 
 The server implements MCP `2025-06-18` over newline-delimited stdio and exposes
 the CLI methods as `taskfleet_view_list`, `taskfleet_task_ingest`, and so on.
@@ -343,12 +355,19 @@ server.
 ## Failure and recovery
 
 - Claims last 15 minutes by default and may be renewed with heartbeats.
-- `reconcile` returns expired claims to `backlog` and preserves their branches.
+- `reconcile` returns expired claims to `backlog`, preserves their branches, and
+  never resumes paused or cancelled tasks.
+- Pausing running work revokes its lease and returns it to held backlog; resuming
+  requires a new claim. Paused blocked work still requires `task.retry`.
+- Cancellation is terminal and preserves branches/worktrees for inspection.
+  Removing those artifacts is an explicit operator action.
 - Required red gates block a task; optional red gates remain visible but allow
   advancement.
 - `task.retry` is explicit so failures are never silently hidden.
 - A merge conflict or failed integration gate blocks only that candidate.
-- All claim, dependency, receipt, and state mutations are transactional.
+- All claim, dependency, receipt, and state mutations are transactional. Git and
+  SQLite cannot form one transaction, so `integration.run` is single-controller;
+  cancellation cannot undo an integration commit already written to Git.
 
 ## Security
 

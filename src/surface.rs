@@ -9,37 +9,22 @@ use serde_json::{Value, json};
 
 use crate::service::{Service, init};
 
+#[rustfmt::skip]
 const METHODS: &[(&str, &str, &[&str])] = &[
     ("view.list", "List saved views", &[]),
     ("task.ingest", "Idempotently ingest tasks from the tasks array", &["tasks"]),
-    (
-        "task.query",
-        "Query compact or full tasks by view, structured filter, state, readiness and limit",
-        &[],
-    ),
+    ("task.query", "Query compact or full tasks by view, structured filter, state, readiness and limit", &[]),
     ("task.get", "Get one complete task dossier and execution state", &["task"]),
     ("task.claim", "Atomically lease ready tasks selected by view/filter", &["owner"]),
     ("task.heartbeat", "Renew a task lease owned by a worker", &["task", "owner"]),
-    (
-        "worktree.prepare",
-        "Create or reuse the isolated Git branch and worktree for a claimed task",
-        &["task"],
-    ),
-    (
-        "gate.run",
-        "Run a command gate for the active step and record a tree-bound receipt",
-        &["task", "gate"],
-    ),
-    (
-        "gate.approve",
-        "Record an explicit human approval gate receipt",
-        &["task", "gate", "by", "approved"],
-    ),
-    (
-        "step.advance",
-        "Advance only when all required gates are green for the current Git tree",
-        &["task", "owner"],
-    ),
+    ("task.cancel", "Durably cancel a non-completed task", &["task"]),
+    ("task.pause", "Hold a non-completed task without losing progress", &["task"]),
+    ("task.resume", "Release a paused task for its lifecycle state", &["task"]),
+    ("task.reprioritize", "Set the durable operational queue priority", &["task", "priority"]),
+    ("worktree.prepare", "Create or reuse the isolated Git branch and worktree for a claimed task", &["task"]),
+    ("gate.run", "Run a command gate for the active step and record a tree-bound receipt", &["task", "gate"]),
+    ("gate.approve", "Record an explicit human approval gate receipt", &["task", "gate", "by", "approved"]),
+    ("step.advance", "Advance only when all required gates are green for the current Git tree", &["task", "owner"]),
     ("task.block", "Block a task with a visible reason", &["task", "reason"]),
     ("task.retry", "Return a blocked task to the claimable backlog", &["task"]),
     ("integration.run", "Merge candidate branches sequentially and re-prove integration gates", &[]),
@@ -120,12 +105,12 @@ pub fn mcp_stream(config: &Path, input: &mut dyn BufRead, output: &mut dyn Write
 pub fn tools() -> Vec<Value> {
     METHODS.iter().map(|(method, description, required)| {
         let name = format!("taskfleet_{}", method.replace('.', "_"));
-        let properties = required.iter().chain(optionals(method)).map(|name| ((*name).to_owned(), match *name { "approved" | "ready" | "full" => json!({"type":"boolean"}), "limit" | "lease_seconds" => json!({"type":"integer"}), "tasks" => json!({"type":"array","items":{"type":"object"}}), "states" => json!({"type":"array","items":{"type":"string"}}), "filter" => json!({"type":"object"}), _ => json!({"type":"string"}) })).collect::<serde_json::Map<_,_>>();
+        let properties = required.iter().chain(optionals(method)).map(|name| ((*name).to_owned(), match *name { "approved" | "ready" | "full" => json!({"type":"boolean"}), "limit" | "lease_seconds" | "priority" => json!({"type":"integer"}), "tasks" => json!({"type":"array","items":{"type":"object"}}), "states" => json!({"type":"array","items":{"type":"string"}}), "filter" => json!({"type":"object"}), _ => json!({"type":"string"}) })).collect::<serde_json::Map<_,_>>();
         json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":true}})
     }).collect()
 }
 
-#[rustfmt::skip] fn optionals(method: &str) -> &'static [&'static str] { match method { "task.query" => &["view","filter","states","ready","full","limit"], "task.claim" => &["view","filter","limit","lease_seconds"], "task.heartbeat" => &["lease_seconds"], "worktree.prepare" => &["base"], "gate.approve" => &["note"], "integration.run" => &["view","filter","base","branch"], _ => &[] } }
+#[rustfmt::skip] fn optionals(method: &str) -> &'static [&'static str] { match method { "task.query" => &["view","filter","states","ready","full","limit"], "task.claim" => &["view","filter","limit","lease_seconds"], "task.heartbeat" => &["lease_seconds"], "task.cancel" => &["reason"], "worktree.prepare" => &["base"], "gate.approve" => &["note"], "integration.run" => &["view","filter","base","branch"], _ => &[] } }
 
 fn take_option(args: &mut Vec<String>, name: &str) -> Option<String> {
     let index = args.iter().position(|arg| arg == name)?;

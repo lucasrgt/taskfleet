@@ -1,7 +1,7 @@
 use std::{fs, path::Path};
 
 use anyhow::{Context, Result, bail};
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::model::{Task, TaskRow};
 
@@ -19,6 +19,12 @@ impl Store {
             CREATE TABLE IF NOT EXISTS dependency(task TEXT NOT NULL, blocker TEXT NOT NULL, PRIMARY KEY(task, blocker));
             CREATE TABLE IF NOT EXISTS receipt(task TEXT NOT NULL, step TEXT NOT NULL, gate TEXT NOT NULL, tree TEXT NOT NULL, ok INTEGER NOT NULL, output TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(task, step, gate, tree));
             CREATE INDEX IF NOT EXISTS task_state ON task(state); CREATE INDEX IF NOT EXISTS dependency_blocker ON dependency(blocker);")?;
+        let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version == 0 {
+            connection.execute_batch("BEGIN; ALTER TABLE task ADD COLUMN paused INTEGER NOT NULL DEFAULT 0; ALTER TABLE task ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0; PRAGMA user_version=1; COMMIT;")?;
+        } else if version != 1 {
+            bail!("unsupported database schema {version}");
+        }
         Ok(Self(connection))
     }
 
@@ -48,14 +54,14 @@ impl Store {
     pub fn all(&self) -> Result<Vec<TaskRow>> {
         let mut statement = self
             .0
-            .prepare("SELECT uri,doc,state,workflow,step,owner,lease_until,branch,worktree,error,revision FROM task ORDER BY uri")?;
+            .prepare("SELECT uri,doc,state,workflow,step,owner,lease_until,branch,worktree,error,revision,paused,queue_priority FROM task ORDER BY queue_priority DESC,uri")?;
         statement.query_map([], row)?.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
     }
 
     pub fn get(&self, uri: &str) -> Result<TaskRow> {
         self.0
             .query_row(
-                "SELECT uri,doc,state,workflow,step,owner,lease_until,branch,worktree,error,revision FROM task WHERE uri=?1",
+                "SELECT uri,doc,state,workflow,step,owner,lease_until,branch,worktree,error,revision,paused,queue_priority FROM task WHERE uri=?1",
                 [uri],
                 row,
             )
@@ -63,31 +69,30 @@ impl Store {
             .with_context(|| format!("task not found: {uri}"))
     }
 
-    pub fn ready(&self, uri: &str) -> Result<bool> {
+    pub fn ready(&self, task: &TaskRow) -> Result<bool> {
         let waiting: i64 = self.0.query_row(
             "SELECT count(*) FROM dependency d LEFT JOIN task b ON b.uri=d.blocker WHERE d.task=?1 AND coalesce(b.state,'missing')!='done'",
-            [uri],
+            [&task.task.uri],
             |row| row.get(0),
         )?;
-        Ok(waiting == 0)
+        Ok(task.state == "backlog" && !task.paused && waiting == 0)
     }
 
     pub fn claim(&mut self, uris: &[String], owner: &str, lease_until: i64, workflows: &[Option<String>]) -> Result<Vec<TaskRow>> {
         let tx = self.0.transaction()?;
         for (uri, workflow) in uris.iter().zip(workflows) {
-            let changed = tx.execute("UPDATE task SET state='running', owner=?2, lease_until=?3, workflow=coalesce(workflow,?4), error=NULL, revision=revision+1 WHERE uri=?1 AND state='backlog'", params![uri, owner, lease_until, workflow])?;
+            let changed = tx.execute("UPDATE task SET state='running', owner=?2, lease_until=?3, workflow=coalesce(workflow,?4), error=NULL, revision=revision+1 WHERE uri=?1 AND state='backlog' AND paused=0", params![uri, owner, lease_until, workflow])?;
             if changed != 1 {
                 bail!("task could not be claimed: {uri}");
             }
         }
-        let result = uris.iter().map(|uri| get_tx(&tx, uri)).collect::<Result<Vec<_>>>()?;
         tx.commit()?;
-        Ok(result)
+        uris.iter().map(|uri| self.get(uri)).collect()
     }
 
     pub fn heartbeat(&self, uri: &str, owner: &str, lease_until: i64) -> Result<()> {
         if self.0.execute(
-            "UPDATE task SET lease_until=?3, revision=revision+1 WHERE uri=?1 AND owner=?2 AND state IN ('running','blocked')",
+            "UPDATE task SET lease_until=?3, revision=revision+1 WHERE uri=?1 AND owner=?2 AND state IN ('running','blocked') AND paused=0",
             params![uri, owner, lease_until],
         )? != 1
         {
@@ -96,16 +101,47 @@ impl Store {
         Ok(())
     }
 
-    pub fn execution(&self, uri: &str, state: &str, step: usize, owner: Option<&str>, error: Option<&str>) -> Result<()> {
-        if self.0.execute("UPDATE task SET state=?2,step=?3,owner=?4,lease_until=CASE WHEN ?4 IS NULL THEN NULL ELSE lease_until END,error=?5,revision=revision+1 WHERE uri=?1", params![uri, state, step as i64, owner, error])? != 1 { bail!("task not found: {uri}"); }
+    pub fn execution(&self, uri: &str, expected: &str, state: &str, step: usize, owner: Option<&str>, error: Option<&str>) -> Result<()> {
+        if self.0.execute("UPDATE task SET state=?3,step=?4,owner=?5,lease_until=CASE WHEN ?5 IS NULL THEN NULL ELSE lease_until END,error=?6,revision=revision+1 WHERE uri=?1 AND state=?2 AND paused=0", params![uri, expected, state, step as i64, owner, error])? != 1 { bail!("task changed or is paused: {uri}"); }
         Ok(())
     }
 
-    pub fn workspace(&self, uri: &str, branch: Option<&str>, worktree: Option<&str>) -> Result<()> {
-        self.0.execute(
-            "UPDATE task SET branch=?2,worktree=?3,revision=revision+1 WHERE uri=?1",
-            params![uri, branch, worktree],
-        )?;
+    pub fn workspace(&self, uri: &str, expected: &str, branch: Option<&str>, worktree: Option<&str>) -> Result<()> {
+        if self.0.execute(
+            "UPDATE task SET branch=?3,worktree=?4,revision=revision+1 WHERE uri=?1 AND state=?2 AND paused=0",
+            params![uri, expected, branch, worktree],
+        )? != 1
+        {
+            bail!("task changed or is paused: {uri}");
+        }
+        Ok(())
+    }
+
+    pub fn control(&self, uri: &str, action: &str, number: Option<i64>, reason: Option<&str>) -> Result<()> {
+        let sql = match action {
+            "pause" => {
+                "UPDATE task SET paused=1,state=CASE state WHEN 'running' THEN 'backlog' ELSE state END,owner=NULL,lease_until=NULL,revision=revision+1 WHERE uri=?1 AND state NOT IN ('done','cancelled') AND ?2 IS ?2 AND ?3 IS ?3"
+            }
+            "resume" => {
+                "UPDATE task SET paused=0,revision=revision+1 WHERE uri=?1 AND paused=1 AND state NOT IN ('done','cancelled') AND ?2 IS ?2 AND ?3 IS ?3"
+            }
+            "cancel" => {
+                "UPDATE task SET state='cancelled',paused=0,owner=NULL,lease_until=NULL,error=coalesce(?3,'cancelled'),revision=revision+1 WHERE uri=?1 AND state!='done' AND ?2 IS ?2"
+            }
+            "reprioritize" => {
+                "UPDATE task SET queue_priority=?2,revision=revision+1 WHERE uri=?1 AND state NOT IN ('done','cancelled') AND ?2 IS ?2 AND ?3 IS ?3"
+            }
+            "block" => {
+                "UPDATE task SET state='blocked',error=?3,revision=revision+1 WHERE uri=?1 AND paused=0 AND state NOT IN ('done','cancelled') AND ?2 IS ?2"
+            }
+            "retry" => {
+                "UPDATE task SET state='backlog',owner=NULL,lease_until=NULL,error=NULL,revision=revision+1 WHERE uri=?1 AND paused=0 AND state='blocked' AND ?2 IS ?2 AND ?3 IS ?3"
+            }
+            _ => bail!("unknown control {action}"),
+        };
+        if self.0.execute(sql, params![uri, number, reason])? != 1 {
+            bail!("task cannot {action}: {uri}");
+        }
         Ok(())
     }
 
@@ -127,7 +163,7 @@ impl Store {
 
     pub fn expire(&self, now: i64) -> Result<usize> {
         Ok(self.0.execute(
-            "UPDATE task SET state='backlog',owner=NULL,lease_until=NULL,error='lease expired',revision=revision+1 WHERE state='running' AND lease_until < ?1",
+            "UPDATE task SET state='backlog',owner=NULL,lease_until=NULL,error='lease expired',revision=revision+1 WHERE state='running' AND paused=0 AND lease_until < ?1",
             [now],
         )?)
     }
@@ -140,6 +176,8 @@ fn row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
     Ok(TaskRow {
         task,
         state: row.get(2)?,
+        paused: row.get::<_, i64>(11)? != 0,
+        queue_priority: row.get(12)?,
         active_workflow: row.get(3)?,
         step: row.get::<_, i64>(4)? as usize,
         owner: row.get(5)?,
@@ -149,13 +187,4 @@ fn row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
         error: row.get(9)?,
         revision: row.get::<_, i64>(10)? as u64,
     })
-}
-
-fn get_tx(tx: &Transaction<'_>, uri: &str) -> Result<TaskRow> {
-    tx.query_row(
-        "SELECT uri,doc,state,workflow,step,owner,lease_until,branch,worktree,error,revision FROM task WHERE uri=?1",
-        [uri],
-        row,
-    )
-    .map_err(Into::into)
 }

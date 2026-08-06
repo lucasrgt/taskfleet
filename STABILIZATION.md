@@ -58,11 +58,12 @@ persisted by Taskfleet.
    the model-facing RLM/message APIs were sufficient for the demonstrated
    orchestration. A Prime core change is not justified unless an extension must
    deterministically own subagents without the orchestrating model.
-6. Broader lifecycle wishes such as typed artifacts, progress history, attempt
-   ceilings, cancellation states, and Kanban controls are not part of the
-   current normative v0.1 task/workflow contract. They require an explicit
-   schema/state-machine design and production-budget consolidation; they were
-   not hidden in UI or adapter code.
+6. At the time of this exercise, cancellation and Kanban controls were outside
+   the normative v0.1 contract. The subsequent core contract added durable
+   cancellation, pause/resume, and operational queue priority in SQLite; the
+   Prime adapter only forwards those core methods. Tracker-specific code remains
+   absent. Typed
+   artifacts, progress history, and attempt ceilings remain excluded.
 7. Integration gate process-spawn errors still abort the integration call rather
    than being converted into a per-candidate red verdict. Normal nonzero exits,
    timeouts, required red verdicts, and merge conflicts are isolated. This

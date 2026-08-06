@@ -1,0 +1,39 @@
+{
+  "name": "taskfleet-prime-agent",
+  "version": "0.1.0",
+  "description": "Thin Prime Agent TUI and lifecycle adapter for the Taskfleet Rust core",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "taskfleet",
+    "prime-agent"
+  ],
+  "engines": {
+    "node": ">=22.8.0"
+  },
+  "scripts": {
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "peerDependencies": {
+    "prime-agent": ">=0.7.0"
+  },
+  "peerDependenciesMeta": {
+    "prime-agent": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

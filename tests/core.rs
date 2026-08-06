@@ -246,3 +246,123 @@ fn corrupt_database_fails_open_with_a_diagnostic() {
     };
     assert!(error.to_string().contains("database"));
 }
+
+#[test]
+fn durable_controls_order_claims_and_fail_closed_dependencies() {
+    let fixture = Fixture::new("");
+    let mut service = fixture.service();
+    let a = task("task://a", "A", "x");
+    let b = task("task://b", "B", "x");
+    let mut dependent = task("task://dependent", "Dependent", "x");
+    dependent["depends_on"] = json!(["task://a"]);
+    ingest(&mut service, vec![a, b, dependent]);
+    service.call("task.reprioritize", &json!({"task":"task://a","priority":5})).unwrap();
+    service.call("task.reprioritize", &json!({"task":"task://b","priority":50})).unwrap();
+    let query = service.call("task.query", &json!({})).unwrap();
+    assert_eq!(query[0]["uri"], "task://b");
+    assert_eq!(query[0]["queue_priority"], 50);
+    let claim = service.call("task.claim", &json!({"owner":"agent"})).unwrap();
+    assert_eq!(claim[0]["task"]["uri"], "task://b");
+
+    let paused = service.call("task.pause", &json!({"task":"task://b"})).unwrap();
+    assert_eq!(paused["execution"]["state"], "backlog");
+    assert_eq!(paused["execution"]["paused"], true);
+    assert!(paused["execution"]["owner"].is_null());
+    assert!(service.call("task.heartbeat", &json!({"task":"task://b","owner":"agent"})).is_err());
+    assert!(
+        service
+            .call("task.query", &json!({"ready":true}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["uri"] != "task://b")
+    );
+    assert_eq!(service.call("reconcile", &json!({})).unwrap()["expired_leases"], 0);
+    drop(service);
+
+    let mut service = fixture.service();
+    let paused = service.call("task.get", &json!({"task":"task://b"})).unwrap();
+    assert_eq!(paused["execution"]["paused"], true);
+    assert_eq!(paused["execution"]["queue_priority"], 50);
+    service.call("task.resume", &json!({"task":"task://b"})).unwrap();
+    assert_eq!(
+        service.call("task.claim", &json!({"owner":"replacement"})).unwrap()[0]["task"]["uri"],
+        "task://b"
+    );
+    service.call("task.cancel", &json!({"task":"task://b","reason":"obsolete"})).unwrap();
+    let cancelled = service.call("task.get", &json!({"task":"task://b"})).unwrap();
+    assert_eq!(cancelled["execution"]["state"], "cancelled");
+    assert_eq!(cancelled["execution"]["error"], "obsolete");
+    assert!(service.call("task.resume", &json!({"task":"task://b"})).is_err());
+    ingest(&mut service, vec![task("task://b", "B updated", "x")]);
+    assert_eq!(
+        service.call("task.get", &json!({"task":"task://b"})).unwrap()["execution"]["state"],
+        "cancelled"
+    );
+
+    service.call("task.cancel", &json!({"task":"task://a"})).unwrap();
+    let ready = service.call("task.query", &json!({"ready":true})).unwrap();
+    assert!(ready.as_array().unwrap().iter().all(|row| row["uri"] != "task://dependent"));
+}
+
+#[test]
+fn stale_execution_cannot_overwrite_a_pause_or_cancel() {
+    let fixture = Fixture::new("");
+    let mut first = fixture.service();
+    ingest(&mut first, vec![task("task://race-control", "Race", "x")]);
+    first.call("task.claim", &json!({"owner":"agent"})).unwrap();
+    let stale = first.store.get("task://race-control").unwrap();
+    let mut second = fixture.service();
+    second.call("task.pause", &json!({"task":"task://race-control"})).unwrap();
+    assert!(
+        first
+            .store
+            .execution(&stale.task.uri, &stale.state, "blocked", stale.step, stale.owner.as_deref(), Some("late"))
+            .is_err()
+    );
+    let row = second.store.get("task://race-control").unwrap();
+    assert!(row.paused);
+    assert_eq!(row.state, "backlog");
+    second.call("task.resume", &json!({"task":"task://race-control"})).unwrap();
+    second.call("task.cancel", &json!({"task":"task://race-control"})).unwrap();
+    assert!(
+        first
+            .store
+            .execution(&stale.task.uri, &stale.state, "candidate", stale.step, None, None)
+            .is_err()
+    );
+    assert_eq!(second.store.get("task://race-control").unwrap().state, "cancelled");
+}
+
+#[test]
+fn current_databases_migrate_and_newer_schemas_fail_closed() {
+    let fixture = Fixture::new("");
+    let database = fixture.repo.join(".taskfleet/state.sqlite");
+    fs::create_dir_all(database.parent().unwrap()).unwrap();
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection.execute_batch("CREATE TABLE task(uri TEXT PRIMARY KEY, doc TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'backlog', workflow TEXT, step INTEGER NOT NULL DEFAULT 0, owner TEXT, lease_until INTEGER, branch TEXT, worktree TEXT, error TEXT, revision INTEGER NOT NULL DEFAULT 0); PRAGMA user_version=0;").unwrap();
+    drop(connection);
+    let service = fixture.service();
+    let version: i64 = service.store.0.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+    assert_eq!(version, 1);
+    let columns = service
+        .store
+        .0
+        .prepare("PRAGMA table_info(task)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(columns.contains(&"paused".into()) && columns.contains(&"queue_priority".into()));
+    drop(service);
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection.pragma_update(None, "user_version", 2).unwrap();
+    drop(connection);
+    let error = match taskfleet::Service::open(&fixture.config) {
+        Ok(_) => panic!("newer schema opened"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("unsupported database schema"));
+}

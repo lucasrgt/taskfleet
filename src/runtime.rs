@@ -37,17 +37,7 @@ pub fn prepare_worktree(repository: &Path, root: &Path, row: &TaskRow, base: Opt
     if path.exists() {
         bail!("worktree path already exists: {}", path.display());
     }
-    let exists = Command::new("git")
-        .args([
-            "-C",
-            &repository.display().to_string(),
-            "show-ref",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch}"),
-        ])
-        .status()?
-        .success();
+    let exists = git(repository, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_ok();
     let mut args = vec!["worktree", "add", path.to_str().context("non-utf8 worktree path")?];
     if exists {
         args.push(&branch);

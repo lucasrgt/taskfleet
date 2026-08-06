@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
 use crate::{
-    model::{Config, Filter, Gate, Task, TaskRow},
+    model::{Config, Filter, Task, TaskRow},
     runtime,
     store::Store,
 };
@@ -28,13 +28,21 @@ impl Service {
             "task.query" => self.query(input),
             "task.get" => self.status(&self.store.get(text(input, "task")?)?),
             "task.claim" => self.claim(input),
-            "task.heartbeat" => self.heartbeat(input),
+            "task.heartbeat" => {
+                let lease = now() + input["lease_seconds"].as_i64().unwrap_or(900).clamp(30, 86_400);
+                self.store.heartbeat(text(input, "task")?, text(input, "owner")?, lease)?;
+                Ok(json!({"lease_until":lease}))
+            }
+            "task.cancel" => self.control(input, "cancel"),
+            "task.pause" => self.control(input, "pause"),
+            "task.resume" => self.control(input, "resume"),
+            "task.reprioritize" => self.control(input, "reprioritize"),
             "worktree.prepare" => self.worktree(input),
             "gate.run" => self.gate(input, false),
             "gate.approve" => self.gate(input, true),
             "step.advance" => self.advance(input),
-            "task.block" => self.block(input),
-            "task.retry" => self.retry(input),
+            "task.block" => self.control(input, "block"),
+            "task.retry" => self.control(input, "retry"),
             "integration.run" => self.integrate(input),
             "reconcile" => self.reconcile(),
             _ => bail!("unknown method {method}"),
@@ -48,19 +56,25 @@ impl Service {
 
     fn query(&self, input: &Value) -> Result<Value> {
         let filter = self.filter(input)?;
-        let states = strings(input, "states");
+        let states = input["states"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
         let ready = input["ready"].as_bool().unwrap_or(false);
         let full = input["full"].as_bool().unwrap_or(false);
         let limit = input["limit"].as_u64().unwrap_or(50).clamp(1, 500) as usize;
         let mut result = Vec::new();
         for row in self.store.all()? {
-            if (!states.is_empty() && !states.contains(&row.state)) || !filter.matches(&row.value()) || (ready && !self.store.ready(&row.task.uri)?) {
+            if (!states.is_empty() && !states.contains(&row.state)) || !filter.matches(&row.value()) || (ready && !self.store.ready(&row)?) {
                 continue;
             }
             result.push(if full {
                 serde_json::to_value(&row)?
             } else {
-                summary(&row, self.store.ready(&row.task.uri)?)
+                json!({"uri":row.task.uri,"title":row.task.title,"tags":row.task.tags,"priority":row.task.priority,"depends_on":row.task.depends_on,"queue_priority":row.queue_priority,"state":row.state,"paused":row.paused,"workflow":row.active_workflow,"step":row.step,"owner":row.owner,"lease_until":row.lease_until,"error":row.error,"revision":row.revision,"ready":self.store.ready(&row)?})
             });
             if result.len() == limit {
                 break;
@@ -76,7 +90,7 @@ impl Service {
         let mut selected = Vec::new();
         let mut workflows = Vec::new();
         for row in self.store.all()? {
-            if row.state != "backlog" || !self.store.ready(&row.task.uri)? || !filter.matches(&row.value()) {
+            if !self.store.ready(&row)? || !filter.matches(&row.value()) {
                 continue;
             }
             let workflow = self.config.route(&row.value(), row.task.workflow.as_deref());
@@ -97,22 +111,31 @@ impl Service {
         ))
     }
 
-    fn heartbeat(&self, input: &Value) -> Result<Value> {
-        let lease = now() + input["lease_seconds"].as_i64().unwrap_or(900).clamp(30, 86_400);
-        self.store.heartbeat(text(input, "task")?, text(input, "owner")?, lease)?;
-        Ok(json!({"lease_until":lease}))
+    fn control(&self, input: &Value, action: &str) -> Result<Value> {
+        let uri = text(input, "task")?;
+        let number = if action == "reprioritize" {
+            Some(input["priority"].as_i64().context("missing priority")?)
+        } else {
+            None
+        };
+        self.store.control(uri, action, number, input["reason"].as_str())?;
+        if matches!(action, "block" | "retry") {
+            Ok(json!({"task":uri,"state":if action == "block" {"blocked"} else {"backlog"}}))
+        } else {
+            self.status(&self.store.get(uri)?)
+        }
     }
 
     fn worktree(&self, input: &Value) -> Result<Value> {
         let row = self.store.get(text(input, "task")?)?;
-        if row.state != "running" && row.state != "blocked" {
+        if row.paused || (row.state != "running" && row.state != "blocked") {
             bail!("task must be claimed before preparing a worktree");
         }
         if let Some(path) = &row.worktree {
             if Path::new(path).exists() {
                 return Ok(json!({"branch":row.branch,"worktree":path,"reused":true}));
             }
-            self.store.workspace(&row.task.uri, row.branch.as_deref(), None)?;
+            self.store.workspace(&row.task.uri, &row.state, row.branch.as_deref(), None)?;
         }
         let (branch, path) = runtime::prepare_worktree(
             &self.config.project.repository,
@@ -120,7 +143,10 @@ impl Service {
             &row,
             input["base"].as_str(),
         )?;
-        self.store.workspace(&row.task.uri, Some(&branch), path.to_str())?;
+        if let Err(error) = self.store.workspace(&row.task.uri, &row.state, Some(&branch), path.to_str()) {
+            let _ = runtime::remove_worktree(&self.config.project.repository, &path);
+            return Err(error);
+        }
         Ok(json!({"branch":branch,"worktree":path,"reused":false}))
     }
 
@@ -131,7 +157,13 @@ impl Service {
         }
         let workflow = self.config.workflow(row.active_workflow.as_deref())?;
         let step = workflow.steps.get(row.step).context("task has no active step")?;
-        let gate = self.gate_for(step, text(input, "gate")?, &row)?;
+        let gate_id = text(input, "gate")?;
+        let gate = self
+            .config
+            .gates
+            .iter()
+            .find(|gate| gate.id == gate_id && step.gates.iter().any(|item| item == gate_id) && gate.when.matches(&row.value()))
+            .with_context(|| format!("gate {gate_id} does not apply to step {}", step.id))?;
         let cwd = row.worktree.as_deref().map(Path::new).unwrap_or(&self.config.project.repository);
         let tree = runtime::tree(cwd, false)?;
         let output = if approval {
@@ -147,6 +179,7 @@ impl Service {
             .receipt(&row.task.uri, &step.id, &gate.id, &tree, ok, &serde_json::to_string(&output)?)?;
         self.store.execution(
             &row.task.uri,
+            &row.state,
             if ok || !gate.required { "running" } else { "blocked" },
             row.step,
             row.owner.as_deref(),
@@ -179,10 +212,11 @@ impl Service {
         let done = next == workflow.steps.len();
         if done && let Some(path) = &row.worktree {
             runtime::remove_worktree(&self.config.project.repository, Path::new(path))?;
-            self.store.workspace(&row.task.uri, row.branch.as_deref(), None)?;
+            self.store.workspace(&row.task.uri, &row.state, row.branch.as_deref(), None)?;
         }
         self.store.execution(
             &row.task.uri,
+            &row.state,
             if done { "candidate" } else { "running" },
             next,
             if done { None } else { row.owner.as_deref() },
@@ -191,22 +225,6 @@ impl Service {
         Ok(
             json!({"task":row.task.uri,"completed_step":step.id,"state":if done {"candidate"} else {"running"},"next_step":workflow.steps.get(next).map(|item|&item.id)}),
         )
-    }
-
-    fn block(&self, input: &Value) -> Result<Value> {
-        let row = self.store.get(text(input, "task")?)?;
-        self.store
-            .execution(&row.task.uri, "blocked", row.step, row.owner.as_deref(), Some(text(input, "reason")?))?;
-        Ok(json!({"task":row.task.uri,"state":"blocked"}))
-    }
-
-    fn retry(&self, input: &Value) -> Result<Value> {
-        let row = self.store.get(text(input, "task")?)?;
-        if row.state != "blocked" {
-            bail!("only blocked tasks can be retried");
-        }
-        self.store.execution(&row.task.uri, "backlog", row.step, None, None)?;
-        Ok(json!({"task":row.task.uri,"state":"backlog"}))
     }
 
     fn reconcile(&self) -> Result<Value> {
@@ -221,12 +239,15 @@ impl Service {
             .store
             .all()?
             .into_iter()
-            .filter(|row| row.state == "candidate" && filter.matches(&row.value()))
+            .filter(|row| row.state == "candidate" && !row.paused && filter.matches(&row.value()))
             .collect::<Vec<_>>();
         if pending.is_empty() {
             bail!("no candidate tasks to integrate");
         }
-        let stamp = nonce();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
         let branch = input["branch"]
             .as_str()
             .map(str::to_owned)
@@ -253,24 +274,25 @@ impl Service {
                 .context("candidate dependency cycle")?;
             let row = pending.remove(index);
             let Some(card_branch) = row.branch.as_deref() else {
-                self.store.execution(&row.task.uri, "blocked", row.step, None, Some("missing task branch"))?;
+                self.store
+                    .execution(&row.task.uri, &row.state, "blocked", row.step, None, Some("missing task branch"))?;
                 blocked.push(row.task.uri);
                 continue;
             };
             if runtime::git(&path, &["merge", "--no-ff", "--no-commit", card_branch]).is_err() {
                 let _ = runtime::git(&path, &["merge", "--abort"]);
-                self.store.execution(&row.task.uri, "blocked", row.step, None, Some("merge conflict"))?;
+                self.store
+                    .execution(&row.task.uri, &row.state, "blocked", row.step, None, Some("merge conflict"))?;
                 blocked.push(row.task.uri);
                 continue;
             }
-            let gates = self
+            let mut green = true;
+            for gate in self
                 .config
                 .gates
                 .iter()
                 .filter(|gate| gate.events.iter().any(|event| event == "integration.merge") && gate.when.matches(&row.value()))
-                .collect::<Vec<_>>();
-            let mut green = true;
-            for gate in gates {
+            {
                 if gate.kind != "command" {
                     green = false;
                     break;
@@ -291,12 +313,12 @@ impl Service {
             }
             if green {
                 runtime::git(&path, &["commit", "-m", &format!("Integrate {}", row.task.uri)])?;
-                self.store.execution(&row.task.uri, "done", row.step, None, None)?;
+                self.store.execution(&row.task.uri, &row.state, "done", row.step, None, None)?;
                 merged.push(row.task.uri);
             } else {
                 runtime::git(&path, &["merge", "--abort"])?;
                 self.store
-                    .execution(&row.task.uri, "blocked", row.step, None, Some("integration gate failed"))?;
+                    .execution(&row.task.uri, &row.state, "blocked", row.step, None, Some("integration gate failed"))?;
                 blocked.push(row.task.uri);
             }
         }
@@ -304,37 +326,22 @@ impl Service {
     }
 
     fn filter(&self, input: &Value) -> Result<Filter> {
-        let view = input["view"]
-            .as_str()
-            .map(|id| {
-                self.config
-                    .views
-                    .iter()
-                    .find(|view| view.id == id)
-                    .cloned()
-                    .with_context(|| format!("unknown view {id}"))
-            })
-            .transpose()?
-            .map(|view| view.filter)
-            .unwrap_or_default();
-        let extra = input
-            .get("filter")
-            .filter(|value| !value.is_null())
-            .map(|value| serde_json::from_value(value.clone()))
-            .transpose()?
-            .unwrap_or_default();
+        let view = match input["view"].as_str() {
+            Some(id) => self
+                .config
+                .views
+                .iter()
+                .find(|view| view.id == id)
+                .with_context(|| format!("unknown view {id}"))?
+                .filter
+                .clone(),
+            None => Filter::default(),
+        };
+        let extra = match input.get("filter").filter(|value| !value.is_null()) {
+            Some(value) => serde_json::from_value(value.clone())?,
+            None => Filter::default(),
+        };
         Ok(Filter::And { args: vec![view, extra] })
-    }
-
-    fn gate_for<'a>(&'a self, step: &crate::model::Step, id: &str, row: &TaskRow) -> Result<&'a Gate> {
-        if !step.gates.iter().any(|gate| gate == id) {
-            bail!("gate {id} does not belong to step {}", step.id);
-        }
-        self.config
-            .gates
-            .iter()
-            .find(|gate| gate.id == id && gate.when.matches(&row.value()))
-            .with_context(|| format!("gate {id} does not apply"))
     }
 
     fn status(&self, row: &TaskRow) -> Result<Value> {
@@ -346,36 +353,17 @@ impl Service {
             Ok(json!({"id":gate.id,"kind":gate.kind,"required":gate.required,"status":match proof {Some(true)=>"green",Some(false)=>"red",None=>"pending"}}))
         }).collect::<Result<Vec<_>>>()).transpose()?.unwrap_or_default();
         Ok(
-            json!({"task":row.task,"execution":{"state":row.state,"workflow":row.active_workflow,"step_index":row.step,"active_step":active,"owner":row.owner,"lease_until":row.lease_until,"branch":row.branch,"worktree":row.worktree,"error":row.error,"revision":row.revision,"tree":tree,"gates":gates}}),
+            json!({"task":row.task,"execution":{"state":row.state,"paused":row.paused,"queue_priority":row.queue_priority,"workflow":row.active_workflow,"step_index":row.step,"active_step":active,"owner":row.owner,"lease_until":row.lease_until,"branch":row.branch,"worktree":row.worktree,"error":row.error,"revision":row.revision,"tree":tree,"gates":gates}}),
         )
     }
 }
 
-fn summary(row: &TaskRow, ready: bool) -> Value {
-    json!({"uri":row.task.uri,"title":row.task.title,"tags":row.task.tags,"priority":row.task.priority,"state":row.state,"workflow":row.active_workflow,"step":row.step,"owner":row.owner,"lease_until":row.lease_until,"error":row.error,"revision":row.revision,"ready":ready})
-}
 fn text<'a>(value: &'a Value, name: &str) -> Result<&'a str> {
     value[name].as_str().with_context(|| format!("missing {name}"))
-}
-fn strings(value: &Value, name: &str) -> Vec<String> {
-    value[name]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_owned)
-        .collect()
 }
 fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64
 }
-fn nonce() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-}
-
 pub fn init(path: &Path) -> Result<()> {
     if path.exists() {
         bail!("config already exists: {}", path.display());

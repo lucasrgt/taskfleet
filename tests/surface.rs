@@ -123,3 +123,22 @@ fn mcp_tool_failures_are_structured_instead_of_terminating_the_server() {
         assert!(serde_json::from_str::<Value>(response).unwrap()["result"]["isError"].as_bool().unwrap());
     }
 }
+
+#[test]
+fn control_tools_publish_exact_machine_readable_schemas() {
+    let tools = taskfleet::surface::tools();
+    for (name, required) in [
+        ("taskfleet_task_cancel", vec!["task"]),
+        ("taskfleet_task_pause", vec!["task"]),
+        ("taskfleet_task_resume", vec!["task"]),
+        ("taskfleet_task_reprioritize", vec!["task", "priority"]),
+    ] {
+        let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
+        assert_eq!(tool["inputSchema"]["required"], json!(required));
+        assert_eq!(tool["inputSchema"]["properties"]["task"]["type"], "string");
+    }
+    let reprioritize = tools.iter().find(|tool| tool["name"] == "taskfleet_task_reprioritize").unwrap();
+    assert_eq!(reprioritize["inputSchema"]["properties"]["priority"]["type"], "integer");
+    let cancel = tools.iter().find(|tool| tool["name"] == "taskfleet_task_cancel").unwrap();
+    assert_eq!(cancel["inputSchema"]["properties"]["reason"]["type"], "string");
+}

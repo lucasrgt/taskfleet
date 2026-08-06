@@ -20,7 +20,18 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov,tokei
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: integrations/prime-agent/package-lock.json
       - run: cargo xtask verify
+      - run: npm ci
+        working-directory: integrations/prime-agent
+      - run: npm test
+        working-directory: integrations/prime-agent
+      - run: npm run typecheck
+        working-directory: integrations/prime-agent
 
   build:
     name: ${{ matrix.name }}
@@ -80,11 +91,11 @@ jobs:
         shell: pwsh
         run: |
           $name = "taskfleet-${{ matrix.target }}"
-          New-Item -ItemType Directory -Path "dist/$name/prime-agent-skill", "dist/$name/docs" | Out-Null
+          New-Item -ItemType Directory -Path "dist/$name/docs" | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/taskfleet${{ matrix.suffix }}" "dist/$name/"
           Copy-Item README.md, ARCHITECTURE.md, STABILIZATION.md, LICENSE "dist/$name/"
           Copy-Item docs/prime-agent.md "dist/$name/docs/"
-          Copy-Item .prime/agent/skills/taskfleet "dist/$name/prime-agent-skill/taskfleet" -Recurse
+          Copy-Item integrations/prime-agent "dist/$name/prime-agent" -Recurse
           Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
       - uses: actions/upload-artifact@v7
         with:

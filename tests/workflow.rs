@@ -312,3 +312,38 @@ fn merge_conflict_blocks_only_that_candidate_and_later_candidates_continue() {
     assert_eq!(std::fs::read_to_string(path.join("seed.txt")).unwrap(), "first\n");
     assert!(path.join("later.txt").exists());
 }
+
+#[test]
+fn candidate_pause_and_priority_control_integration_selection() {
+    let fixture = Fixture::new("");
+    let mut service = fixture.service();
+    ingest(
+        &mut service,
+        vec![
+            task("task://low", "Low", "x"),
+            task("task://held", "Held", "x"),
+            task("task://middle", "Middle", "x"),
+        ],
+    );
+    let claimed = service.call("task.claim", &json!({"owner":"fleet","limit":3})).unwrap();
+    for (index, row) in claimed.as_array().unwrap().iter().enumerate() {
+        let uri = row["task"]["uri"].as_str().unwrap();
+        let workspace = service.call("worktree.prepare", &json!({"task":uri})).unwrap();
+        commit(Path::new(workspace["worktree"].as_str().unwrap()), &format!("control-{index}.txt"), uri);
+        service.call("step.advance", &json!({"task":uri,"owner":"fleet"})).unwrap();
+    }
+    service.call("task.reprioritize", &json!({"task":"task://low","priority":1})).unwrap();
+    service.call("task.reprioritize", &json!({"task":"task://middle","priority":10})).unwrap();
+    service.call("task.reprioritize", &json!({"task":"task://held","priority":50})).unwrap();
+    let held = service.call("task.pause", &json!({"task":"task://held"})).unwrap();
+    assert_eq!(held["execution"]["state"], "candidate");
+    let first = service.call("integration.run", &json!({"branch":"integration/controls-first"})).unwrap();
+    assert_eq!(first["merged"], json!(["task://middle", "task://low"]));
+    assert_eq!(
+        service.call("task.get", &json!({"task":"task://held"})).unwrap()["execution"]["state"],
+        "candidate"
+    );
+    service.call("task.resume", &json!({"task":"task://held"})).unwrap();
+    let second = service.call("integration.run", &json!({"branch":"integration/controls-second"})).unwrap();
+    assert_eq!(second["merged"], json!(["task://held"]));
+}

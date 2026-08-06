@@ -166,6 +166,8 @@ pub struct TaskRow {
     #[serde(flatten)]
     pub task: Task,
     pub state: String,
+    pub paused: bool,
+    pub queue_priority: i64,
     pub active_workflow: Option<String>,
     pub step: usize,
     pub owner: Option<String>,
@@ -281,7 +283,7 @@ impl TaskRow {
     pub fn value(&self) -> Value {
         let mut value = serde_json::to_value(&self.task).unwrap_or(Value::Null);
         if let Some(map) = value.as_object_mut() {
-            map.insert("execution".into(), json!({"state":self.state,"workflow":self.active_workflow,"step":self.step,"owner":self.owner,"lease_until":self.lease_until,"branch":self.branch,"worktree":self.worktree,"error":self.error,"revision":self.revision}));
+            map.insert("execution".into(), json!({"state":self.state,"paused":self.paused,"queue_priority":self.queue_priority,"workflow":self.active_workflow,"step":self.step,"owner":self.owner,"lease_until":self.lease_until,"branch":self.branch,"worktree":self.worktree,"error":self.error,"revision":self.revision}));
         }
         value
     }
