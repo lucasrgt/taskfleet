@@ -164,7 +164,9 @@ fn external_state_environment_probe() {
     let Some(repository) = std::env::var_os("TASKFLEET_ENV_PROBE_REPOSITORY") else {
         return;
     };
-    let root = std::path::PathBuf::from(std::env::var_os("TASKFLEET_ENV_PROBE_ROOT").unwrap());
+    let root = std::path::PathBuf::from(std::env::var_os("TASKFLEET_ENV_PROBE_ROOT").unwrap())
+        .canonicalize()
+        .unwrap();
     let variables = ["TASKFLEET_STATE_HOME", "XDG_STATE_HOME", "LOCALAPPDATA", "HOME", "USERPROFILE"];
     for name in variables {
         unsafe {
