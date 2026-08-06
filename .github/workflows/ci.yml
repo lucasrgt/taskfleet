@@ -53,7 +53,19 @@ jobs:
         if: runner.os == 'Linux'
         with:
           tool: cargo-zigbuild@0.23.0
-      - run: cargo test --locked --target ${{ matrix.target }}
+      - name: Run platform tests
+        shell: bash
+        run: |
+          if ! cargo test --locked --target "${{ matrix.target }}" >platform-test.log 2>&1; then
+            tail -n 80 platform-test.log
+            message="$(tail -n 40 platform-test.log)"
+            message="${message//'%'/'%25'}"
+            message="${message//$'\r'/'%0D'}"
+            message="${message//$'\n'/'%0A'}"
+            echo "::error title=Platform test failure::$message"
+            exit 1
+          fi
+          cat platform-test.log
       - name: Build portable Linux binary
         if: runner.os == 'Linux'
         run: cargo zigbuild --release --locked --target ${{ matrix.target }}.2.17
