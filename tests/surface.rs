@@ -144,6 +144,25 @@ fn control_tools_publish_exact_machine_readable_schemas() {
 }
 
 #[test]
+#[ignore]
+fn external_manage_lock_probe() {
+    let Some(repository) = std::env::var_os("TASKFLEET_LOCK_PROBE_REPOSITORY") else {
+        return;
+    };
+    let home = std::env::var_os("TASKFLEET_LOCK_PROBE_HOME").unwrap();
+    let ready = std::env::var_os("TASKFLEET_LOCK_PROBE_READY").unwrap();
+    let acquired = std::env::var_os("TASKFLEET_LOCK_PROBE_ACQUIRED").unwrap();
+    std::fs::write(ready, b"ready").unwrap();
+    taskfleet::location::manage(
+        std::path::Path::new(&repository),
+        Some(std::path::Path::new(&home)),
+        "disable",
+    )
+    .unwrap();
+    std::fs::write(acquired, b"acquired").unwrap();
+}
+
+#[test]
 fn external_mode_is_opt_in_reversible_and_leaves_the_repository_clean() {
     let fixture = Fixture::new("");
     std::fs::remove_file(&fixture.config).unwrap();
@@ -175,17 +194,30 @@ fn external_mode_is_opt_in_reversible_and_leaves_the_repository_clean() {
         .open(lock_path)
         .unwrap();
     held.lock().unwrap();
-    let mut waiting = std::process::Command::new(env!("CARGO_BIN_EXE_taskfleet"))
-        .current_dir(&fixture.repo)
-        .args(["external", "disable", "--state-home", home])
+    let ready = fixture.temp.path().join("lock-probe-ready");
+    let acquired = fixture.temp.path().join("lock-probe-acquired");
+    let mut waiting = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored", "--exact", "external_manage_lock_probe"])
+        .env("TASKFLEET_LOCK_PROBE_REPOSITORY", &fixture.repo)
+        .env("TASKFLEET_LOCK_PROBE_HOME", home)
+        .env("TASKFLEET_LOCK_PROBE_READY", &ready)
+        .env("TASKFLEET_LOCK_PROBE_ACQUIRED", &acquired)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
+    for _ in 0..500 {
+        if ready.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(ready.exists(), "external lifecycle lock probe did not start");
     std::thread::sleep(std::time::Duration::from_millis(25));
-    assert!(waiting.try_wait().unwrap().is_none(), "external lifecycle lock was not exclusive");
+    assert!(!acquired.exists(), "external lifecycle lock was not exclusive");
     drop(held);
     assert!(waiting.wait().unwrap().success());
+    assert!(acquired.exists());
 
     let enabled: Value = serde_json::from_str(&cli(&fixture.repo, &["external", "enable", "--state-home", home], "").unwrap()).unwrap();
     assert_eq!(enabled["enabled"], true);
