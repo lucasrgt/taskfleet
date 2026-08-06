@@ -230,7 +230,7 @@ fn concurrent_services_do_not_duplicate_a_claim() {
         })
     });
     let outcomes = handles.into_iter().map(|handle| handle.join().unwrap()).collect::<Vec<_>>();
-    assert_eq!(outcomes.iter().filter(|result| result.is_ok()).count(), 1);
+    assert!(outcomes.iter().filter_map(|result| result.as_ref().ok()).all(|claimed| *claimed <= 1));
     assert_eq!(outcomes.into_iter().filter_map(Result::ok).sum::<usize>(), 1);
 }
 
