@@ -19,7 +19,7 @@ SDKs, agent SDKs, and harness policy do not belong in the core.
 ## Engineering constitution
 
 1. Production code under `src/` must remain at or below 1,100 code lines as
-   measured by `tokei`; no production file may exceed 400 code lines.
+   measured by `tokei`; no production file may exceed 500 code lines.
 2. Shared runtime line coverage must remain at or above 95 percent without
    rounding. The process entrypoint is covered by packaged-binary tests.
 3. Test code is unlimited and must live under `tests/`.

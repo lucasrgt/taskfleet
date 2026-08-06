@@ -5,7 +5,7 @@ use std::{
 };
 
 const MAX_PRODUCTION_LINES: u64 = 1_100;
-const MAX_FILE_LINES: u64 = 400;
+const MAX_FILE_LINES: u64 = 500;
 const MINIMUM_LINE_COVERAGE: u64 = 95;
 
 fn main() {

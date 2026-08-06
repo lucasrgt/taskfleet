@@ -382,7 +382,7 @@ cargo xtask verify
 
 | Invariant | Gate |
 | --- | --- |
-| Maintained production code | At most 1,100 lines; at most 400 per file |
+| Maintained production code | At most 1,100 tokei code lines; at most 500 per file |
 | Shared runtime line coverage | At least 95 percent without rounding |
 | Code quality | rustfmt and Clippy with warnings denied |
 | Packaged surface | End-to-end CLI binary and MCP protocol tests |
