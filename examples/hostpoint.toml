@@ -7,6 +7,8 @@ schema = 1
 repository = ".."
 database = "../.taskfleet/state.sqlite"
 worktree_root = "../../.taskfleet-worktrees"
+cas_root = "../.taskfleet/cas"
+workspace_provider = "git-worktree"
 default_workflow = "delivery"
 
 # One imported task may appear in several views without being duplicated.

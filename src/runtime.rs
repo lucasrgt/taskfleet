@@ -24,7 +24,7 @@ pub struct GateResult {
     pub stderr: String,
 }
 
-pub fn prepare_worktree(repository: &Path, root: &Path, row: &TaskRow, base: Option<&str>) -> Result<(String, PathBuf)> {
+pub fn prepare_worktree(repository: &Path, root: &Path, row: &TaskRow, base: Option<&str>, path: Option<PathBuf>) -> Result<(String, PathBuf)> {
     git(repository, &["rev-parse", "--git-dir"])?;
     fs::create_dir_all(root)?;
     git(repository, &["worktree", "prune"])?;
@@ -33,7 +33,7 @@ pub fn prepare_worktree(repository: &Path, root: &Path, row: &TaskRow, base: Opt
         if value.is_empty() { "task".into() } else { value }
     };
     let branch = row.branch.clone().unwrap_or_else(|| format!("taskfleet/{name}-{:08x}", hash(&row.task.uri)));
-    let path = root.join(format!("{name}-{:08x}", hash(&row.task.uri)));
+    let path = path.unwrap_or_else(|| root.join(format!("{name}-{:08x}", hash(&row.task.uri))));
     if path.exists() {
         bail!("worktree path already exists: {}", path.display());
     }
@@ -128,7 +128,7 @@ pub fn hash(text: &str) -> u32 {
     text.bytes().fold(2_166_136_261, |hash, byte| (hash ^ u32::from(byte)).wrapping_mul(16_777_619))
 }
 
-fn slug(text: &str) -> String {
+pub fn slug(text: &str) -> String {
     let mut out = text
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })

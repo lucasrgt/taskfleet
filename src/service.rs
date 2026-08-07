@@ -1,57 +1,83 @@
-use std::{fs, path::Path};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
 use crate::{
+    capsules::Capsules,
+    cas::Cas,
+    integration,
     model::{Config, Filter, Task, TaskRow},
     runtime,
     store::Store,
+    workspace,
 };
 
 pub struct Service {
     pub config: Config,
     pub store: Store,
+    pub cas: Cas,
 }
 
 impl Service {
     pub fn open(config: &Path) -> Result<Self> {
         let config = Config::load(config)?;
         let store = Store::open(&config.project.database)?;
-        Ok(Self { config, store })
+        let cas = Cas::open(&config.project.cas_root)?;
+        Ok(Self { config, store, cas })
     }
 
     pub fn call(&mut self, method: &str, input: &Value) -> Result<Value> {
+        let capsules = Capsules {
+            config: &self.config,
+            store: &self.store,
+            cas: &self.cas,
+        };
         match method {
             "view.list" => Ok(serde_json::to_value(&self.config.views)?),
             "task.ingest" => self.ingest(input),
             "task.query" => self.query(input),
             "task.get" => self.status(&self.store.get(text(input, "task")?)?),
             "task.claim" => self.claim(input),
-            "task.heartbeat" => {
-                let lease = now() + input["lease_seconds"].as_i64().unwrap_or(900).clamp(30, 86_400);
-                self.store.heartbeat(text(input, "task")?, text(input, "owner")?, lease)?;
-                Ok(json!({"lease_until":lease}))
-            }
+            "task.heartbeat" => self.heartbeat(input),
             "task.cancel" => self.control(input, "cancel"),
             "task.pause" => self.control(input, "pause"),
             "task.resume" => self.control(input, "resume"),
             "task.reprioritize" => self.control(input, "reprioritize"),
-            "worktree.prepare" => self.worktree(input),
+            "worktree.prepare" | "workspace.prepare" => self.prepare_workspace(input),
+            "workspace.status" => self.workspace_status(input),
+            "workspace.diff" => self.workspace_diff(input),
+            "workspace.destroy" => self.workspace_destroy(input),
+            "workspace.gc" => capsules.workspace_gc(),
             "gate.run" => self.gate(input, false),
             "gate.approve" => self.gate(input, true),
             "step.advance" => self.advance(input),
             "task.block" => self.control(input, "block"),
             "task.retry" => self.control(input, "retry"),
-            "integration.run" => self.integrate(input),
+            "task.context" => capsules.task_context(input),
+            "artifact.publish" => capsules.artifact_publish(input),
+            "artifact.resolve" => capsules.artifact_resolve(input),
+            "artifact.materialize" => capsules.artifact_materialize(input),
+            "receipt.publish" => capsules.receipt_publish(input),
+            "receipt.get" => capsules.receipt_get(input),
+            "receipt.resolve_dependencies" => capsules.receipt_resolve_dependencies(input),
+            "integration.run" => integration::run(&self.config, &self.store, &self.filter(input)?, input),
             "reconcile" => self.reconcile(),
             _ => bail!("unknown method {method}"),
         }
     }
 
+    fn capsules(&self) -> Capsules<'_> {
+        Capsules {
+            config: &self.config,
+            store: &self.store,
+            cas: &self.cas,
+        }
+    }
+
     fn ingest(&mut self, input: &Value) -> Result<Value> {
         let tasks: Vec<Task> = serde_json::from_value(input.get("tasks").cloned().unwrap_or_else(|| input.clone()))?;
-        Ok(json!({"ingested":self.store.ingest(&tasks)?}))
+        Ok(json!({"ingested": self.store.ingest(&tasks)?}))
     }
 
     fn query(&self, input: &Value) -> Result<Value> {
@@ -105,6 +131,12 @@ impl Service {
         ))
     }
 
+    fn heartbeat(&self, input: &Value) -> Result<Value> {
+        let lease = now() + input["lease_seconds"].as_i64().unwrap_or(900).clamp(30, 86_400);
+        self.store.heartbeat(text(input, "task")?, text(input, "owner")?, lease)?;
+        Ok(json!({"lease_until": lease}))
+    }
+
     fn control(&self, input: &Value, action: &str) -> Result<Value> {
         let uri = text(input, "task")?;
         let number = if action == "reprioritize" {
@@ -120,33 +152,82 @@ impl Service {
         }
     }
 
-    fn worktree(&self, input: &Value) -> Result<Value> {
+    fn prepare_workspace(&self, input: &Value) -> Result<Value> {
         let row = self.store.get(text(input, "task")?)?;
         if row.paused || (row.state != "running" && row.state != "blocked") {
-            bail!("task must be claimed before preparing a worktree");
+            bail!("task must be claimed before preparing a workspace");
         }
         if let Some(path) = &row.worktree {
             if Path::new(path).exists() {
-                return Ok(json!({"branch":row.branch,"worktree":path,"reused":true}));
+                return Ok(json!({
+                    "provider": self.config.project.workspace_provider,
+                    "branch": row.branch,
+                    "worktree": path,
+                    "path": path,
+                    "reused": true,
+                    "merged_dependencies": [],
+                    "env": workspace::cache_env(&self.config.project),
+                }));
             }
             self.store.workspace(&row.task.uri, &row.state, row.branch.as_deref(), None)?;
         }
-        let (branch, path) = runtime::prepare_worktree(
+        let mut deps = Vec::new();
+        for dep_uri in &row.task.depends_on {
+            let dep = self.store.get(dep_uri)?;
+            if !matches!(dep.state.as_str(), "candidate" | "done") {
+                bail!("dependency {dep_uri} is not ready for workspace sync");
+            }
+            let Some(branch) = dep.branch.clone() else {
+                bail!("dependency {dep_uri} has no candidate branch");
+            };
+            deps.push((dep_uri.clone(), branch));
+        }
+        let occupied = self.store.live_workspaces()?;
+        let prepared = workspace::prepare(
+            &self.config.project,
             &self.config.project.repository,
-            &self.config.project.worktree_root,
             &row,
             input["base"].as_str(),
+            &deps,
+            &occupied,
         )?;
-        if let Err(error) = self.store.workspace(&row.task.uri, &row.state, Some(&branch), path.to_str()) {
-            let _ = runtime::remove_worktree(&self.config.project.repository, &path);
+        if let Err(error) = self.store.workspace(
+            &row.task.uri,
+            &row.state,
+            prepared["branch"].as_str(),
+            prepared["worktree"].as_str().or_else(|| prepared["path"].as_str()),
+        ) {
+            if let Some(path) = prepared["worktree"].as_str().or_else(|| prepared["path"].as_str()) {
+                let _ = workspace::destroy(&self.config.project.repository, Path::new(path), &self.config.project.workspace_provider);
+            }
             return Err(error);
         }
-        Ok(json!({"branch":branch,"worktree":path,"reused":false}))
+        Ok(prepared)
+    }
+
+    fn workspace_status(&self, input: &Value) -> Result<Value> {
+        workspace::status(&workspace::workspace_path(&self.store.get(text(input, "task")?)?)?)
+    }
+
+    fn workspace_diff(&self, input: &Value) -> Result<Value> {
+        workspace::diff(&workspace::workspace_path(&self.store.get(text(input, "task")?)?)?)
+    }
+
+    fn workspace_destroy(&self, input: &Value) -> Result<Value> {
+        let row = self.store.get(text(input, "task")?)?;
+        if row.paused {
+            bail!("paused tasks cannot destroy workspaces");
+        }
+        if let Some(path) = &row.worktree {
+            workspace::destroy(&self.config.project.repository, Path::new(path), &self.config.project.workspace_provider)?;
+            self.store.workspace(&row.task.uri, &row.state, row.branch.as_deref(), None)?;
+        }
+        Ok(json!({"task": row.task.uri, "destroyed": true}))
     }
 
     fn gate(&self, input: &Value, approval: bool) -> Result<Value> {
         let row = self.store.get(text(input, "task")?)?;
-        if row.state != "running" {
+        if row.paused || row.state != "running" {
             bail!("only running tasks can execute gates");
         }
         let workflow = self.config.workflow(row.active_workflow.as_deref())?;
@@ -164,7 +245,7 @@ impl Service {
             if gate.kind != "approval" {
                 bail!("gate {} is not an approval gate", gate.id);
             }
-            json!({"gate":gate.id,"tree":tree,"ok":input["approved"].as_bool().unwrap_or(false),"approved_by":text(input,"by")?,"note":input["note"]})
+            json!({"gate": gate.id, "tree": tree, "ok": input["approved"].as_bool().unwrap_or(false), "approved_by": text(input, "by")?, "note": input["note"]})
         } else {
             serde_json::to_value(runtime::run_gate(gate, &row, cwd, &step.id, false)?)?
         };
@@ -184,7 +265,7 @@ impl Service {
 
     fn advance(&self, input: &Value) -> Result<Value> {
         let row = self.store.get(text(input, "task")?)?;
-        if row.state != "running" || row.owner.as_deref() != Some(text(input, "owner")?) {
+        if row.paused || row.state != "running" || row.owner.as_deref() != Some(text(input, "owner")?) {
             bail!("task is not running or owned by this worker");
         }
         let workflow = self.config.workflow(row.active_workflow.as_deref())?;
@@ -205,7 +286,7 @@ impl Service {
         let next = row.step + 1;
         let done = next == workflow.steps.len();
         if done && let Some(path) = &row.worktree {
-            runtime::remove_worktree(&self.config.project.repository, Path::new(path))?;
+            workspace::destroy(&self.config.project.repository, Path::new(path), &self.config.project.workspace_provider)?;
             self.store.workspace(&row.task.uri, &row.state, row.branch.as_deref(), None)?;
         }
         self.store.execution(
@@ -216,107 +297,35 @@ impl Service {
             if done { None } else { row.owner.as_deref() },
             None,
         )?;
-        Ok(
-            json!({"task":row.task.uri,"completed_step":step.id,"state":if done {"candidate"} else {"running"},"next_step":workflow.steps.get(next).map(|item|&item.id)}),
-        )
+        let mut response = json!({
+            "task": row.task.uri,
+            "completed_step": step.id,
+            "state": if done { "candidate" } else { "running" },
+            "next_step": workflow.steps.get(next).map(|item| &item.id),
+        });
+        if done && let Some(receipt) = input.get("receipt").filter(|value| !value.is_null()) {
+            response["receipt"] = self.capsules().publish_receipt_value(receipt)?;
+        }
+        Ok(response)
     }
 
     fn reconcile(&self) -> Result<Value> {
         let expired = self.store.expire(now())?;
-        runtime::git(&self.config.project.repository, &["worktree", "prune"])?;
-        Ok(json!({"expired_leases":expired}))
-    }
-
-    fn integrate(&self, input: &Value) -> Result<Value> {
-        let filter = self.filter(input)?;
-        let mut pending = self
-            .store
-            .all()?
-            .into_iter()
-            .filter(|row| row.state == "candidate" && !row.paused && filter.matches(&row.value()))
-            .collect::<Vec<_>>();
-        if pending.is_empty() {
-            bail!("no candidate tasks to integrate");
-        }
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let branch = input["branch"]
-            .as_str()
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("integration/taskfleet-{stamp}"));
-        let path = self.config.project.worktree_root.join(format!("integration-{stamp}"));
-        fs::create_dir_all(&self.config.project.worktree_root)?;
-        runtime::git(
-            &self.config.project.repository,
-            &[
-                "worktree",
-                "add",
-                path.to_str().context("non-utf8 integration path")?,
-                "-b",
-                &branch,
-                input["base"].as_str().unwrap_or("HEAD"),
-            ],
-        )?;
-        let mut merged = Vec::new();
-        let mut blocked = Vec::new();
-        while !pending.is_empty() {
-            let index = pending
-                .iter()
-                .position(|row| row.task.depends_on.iter().all(|dep| !pending.iter().any(|other| &other.task.uri == dep)))
-                .context("candidate dependency cycle")?;
-            let row = pending.remove(index);
-            let Some(card_branch) = row.branch.as_deref() else {
-                self.store
-                    .execution(&row.task.uri, &row.state, "blocked", row.step, None, Some("missing task branch"))?;
-                blocked.push(row.task.uri);
+        let mut destroyed_workspaces = 0usize;
+        for row in self.store.all()? {
+            if row.paused || !matches!(row.state.as_str(), "candidate" | "done" | "backlog") {
+                continue;
+            }
+            let Some(path) = &row.worktree else {
                 continue;
             };
-            if runtime::git(&path, &["merge", "--no-ff", "--no-commit", card_branch]).is_err() {
-                let _ = runtime::git(&path, &["merge", "--abort"]);
-                self.store
-                    .execution(&row.task.uri, &row.state, "blocked", row.step, None, Some("merge conflict"))?;
-                blocked.push(row.task.uri);
-                continue;
-            }
-            let mut green = true;
-            for gate in self
-                .config
-                .gates
-                .iter()
-                .filter(|gate| gate.events.iter().any(|event| event == "integration.merge") && gate.when.matches(&row.value()))
-            {
-                if gate.kind != "command" {
-                    green = false;
-                    break;
-                }
-                let result = runtime::run_gate(gate, &row, &path, "integration", true)?;
-                self.store.receipt(
-                    &row.task.uri,
-                    "integration",
-                    &gate.id,
-                    &result.tree,
-                    result.ok,
-                    &serde_json::to_string(&result)?,
-                )?;
-                if gate.required && !result.ok {
-                    green = false;
-                    break;
-                }
-            }
-            if green {
-                runtime::git(&path, &["commit", "-m", &format!("Integrate {}", row.task.uri)])?;
-                self.store.execution(&row.task.uri, &row.state, "done", row.step, None, None)?;
-                merged.push(row.task.uri);
-            } else {
-                runtime::git(&path, &["merge", "--abort"])?;
-                self.store
-                    .execution(&row.task.uri, &row.state, "blocked", row.step, None, Some("integration gate failed"))?;
-                blocked.push(row.task.uri);
-            }
+            let _ = workspace::destroy(&self.config.project.repository, Path::new(path), &self.config.project.workspace_provider);
+            self.store.workspace(&row.task.uri, &row.state, row.branch.as_deref(), None)?;
+            destroyed_workspaces += 1;
         }
-        Ok(json!({"branch":branch,"worktree":path,"merged":merged,"blocked":blocked}))
+        runtime::git(&self.config.project.repository, &["worktree", "prune"])?;
+        let gc = self.capsules().workspace_gc()?;
+        Ok(json!({"expired_leases": expired, "destroyed_workspaces": destroyed_workspaces, "gc": gc}))
     }
 
     fn filter(&self, input: &Value) -> Result<Filter> {
@@ -342,13 +351,49 @@ impl Service {
         let workflow = self.config.workflow(row.active_workflow.as_deref())?;
         let active = workflow.steps.get(row.step);
         let tree = row.worktree.as_deref().and_then(|path| runtime::tree(Path::new(path), false).ok());
-        let gates = active.map(|step| step.gates.iter().filter_map(|id| self.config.gates.iter().find(|gate| &gate.id == id)).filter(|gate| gate.when.matches(&row.value())).map(|gate| {
-            let proof = tree.as_deref().map(|tree| self.store.proof(&row.task.uri, &step.id, &gate.id, tree)).transpose()?.flatten();
-            Ok(json!({"id":gate.id,"kind":gate.kind,"required":gate.required,"status":match proof {Some(true)=>"green",Some(false)=>"red",None=>"pending"}}))
-        }).collect::<Result<Vec<_>>>()).transpose()?.unwrap_or_default();
-        Ok(
-            json!({"task":row.task,"execution":{"state":row.state,"paused":row.paused,"queue_priority":row.queue_priority,"workflow":row.active_workflow,"step_index":row.step,"active_step":active,"owner":row.owner,"lease_until":row.lease_until,"branch":row.branch,"worktree":row.worktree,"error":row.error,"revision":row.revision,"tree":tree,"gates":gates}}),
-        )
+        let gates = active
+            .map(|step| {
+                step.gates
+                    .iter()
+                    .filter_map(|id| self.config.gates.iter().find(|gate| &gate.id == id))
+                    .filter(|gate| gate.when.matches(&row.value()))
+                    .map(|gate| {
+                        let proof = tree
+                            .as_deref()
+                            .map(|tree| self.store.proof(&row.task.uri, &step.id, &gate.id, tree))
+                            .transpose()?
+                            .flatten();
+                        Ok(json!({"id":gate.id,"kind":gate.kind,"required":gate.required,"status":match proof {
+                            Some(true) => "green",
+                            Some(false) => "red",
+                            None => "pending",
+                        }}))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let receipt = self.store.latest_task_receipt(&row.task.uri)?.map(|(digest, _)| digest);
+        Ok(json!({
+            "task": row.task,
+            "execution": {
+                "state": row.state,
+                "paused": row.paused,
+                "queue_priority": row.queue_priority,
+                "workflow": row.active_workflow,
+                "step_index": row.step,
+                "active_step": active,
+                "owner": row.owner,
+                "lease_until": row.lease_until,
+                "branch": row.branch,
+                "worktree": row.worktree,
+                "error": row.error,
+                "revision": row.revision,
+                "tree": tree,
+                "gates": gates,
+                "receipt_digest": receipt,
+            }
+        }))
     }
 }
 

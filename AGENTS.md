@@ -10,21 +10,23 @@ any tracker or harness. Its public model is deliberately small:
 1. Tasks are normalized dossiers with stable provider URIs.
 2. Views are saved structured filters over one task store.
 3. Workflows are ordered steps; each step may require gates.
-4. Agents claim tasks through leases and work in isolated Git worktrees.
-5. Candidate branches are integrated sequentially and re-proved by gates.
+4. Agents claim tasks through leases and work in isolated workspaces.
+5. Dependencies unblock when blockers reach `candidate` or `done`.
+6. Candidate branches are integrated sequentially and re-proved by gates.
 
 CLI and MCP are equivalent transports over the same service. Provider-specific
 SDKs, agent SDKs, and harness policy do not belong in the core.
 
 ## Engineering constitution
 
-1. Production code under `src/` must remain at or below 1,100 code lines as
-   measured by `tokei`; no production file may exceed 500 code lines.
+1. No production file under `src/` may exceed 500 code lines as measured by
+   `tokei`. Split modules rather than grow a file past that limit. There is no
+   project-wide line ceiling.
 2. Shared runtime line coverage must remain at or above 95 percent without
    rounding. The process entrypoint is covered by packaged-binary tests.
 3. Test code is unlimited and must live under `tests/`.
 4. Production behavior may not be moved into scripts, generated files,
-   integrations, or test helpers to evade the line budget.
+   integrations, or test helpers to evade the per-file line budget.
 5. SQLite is the local operational source of truth; external trackers remain
    the source of imported task content.
 6. Filters are structured data, never executable query fragments.
@@ -32,11 +34,8 @@ SDKs, agent SDKs, and harness policy do not belong in the core.
 8. Required gates fail closed and their receipts are valid only for the exact
    Git tree they proved.
 9. CLI and MCP must call the same core operations.
-
-The 1,100-line ceiling covers the three irreducible domains in this product:
-task projection, gated workflow execution, and Git integration. Raise it only
-after demonstrating that deletion or consolidation cannot absorb a required
-behavior.
+10. Completed tasks publish content-addressed receipts so dependents recover
+    declared outputs without reopening predecessor workspaces.
 
 ## Change discipline
 

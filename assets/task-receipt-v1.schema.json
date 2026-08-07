@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://taskfleet.dev/schemas/task-receipt-v1.json",
+  "title": "Taskfleet Task Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_uri",
+    "step_id",
+    "producer",
+    "source",
+    "dependencies",
+    "changes",
+    "artifacts",
+    "proofs",
+    "context_exports",
+    "fingerprint",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "task_uri": { "type": "string", "minLength": 1 },
+    "step_id": { "type": "string", "minLength": 1 },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_id", "harness"],
+      "properties": {
+        "agent_id": { "type": "string" },
+        "harness": { "type": "string" },
+        "model": { "type": ["string", "null"] }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_tree", "result_tree", "workspace_provider"],
+      "properties": {
+        "base_tree": { "type": "string" },
+        "result_tree": { "type": "string" },
+        "branch": { "type": ["string", "null"] },
+        "commit": { "type": ["string", "null"] },
+        "workspace_provider": {
+          "enum": ["git-worktree", "agentfs", "overlayfs", "reflink", "jj-workspace"]
+        },
+        "workspace_id": { "type": ["string", "null"] }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["task_uri", "receipt_digest"],
+        "properties": {
+          "task_uri": { "type": "string" },
+          "receipt_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+        }
+      }
+    },
+    "changes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["paths", "patch_digest"],
+      "properties": {
+        "paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "patch_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "digest", "media_type", "size", "role"],
+        "properties": {
+          "name": { "type": "string" },
+          "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+          "media_type": { "type": "string" },
+          "size": { "type": "integer", "minimum": 0 },
+          "role": { "enum": ["input", "output", "proof", "context", "log"] },
+          "logical_path": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "proofs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["gate", "status", "tree", "command_digest"],
+        "properties": {
+          "gate": { "type": "string" },
+          "status": { "enum": ["green", "red", "approved", "rejected"] },
+          "tree": { "type": "string" },
+          "command_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+          "stdout_digest": { "type": ["string", "null"] },
+          "stderr_digest": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "context_exports": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "decisions", "assumptions", "symbols", "contracts", "followups"],
+      "properties": {
+        "summary": { "type": "string" },
+        "decisions": { "type": "array", "items": { "type": "string" } },
+        "assumptions": { "type": "array", "items": { "type": "string" } },
+        "symbols": { "type": "array", "items": { "type": "string" } },
+        "contracts": { "type": "array", "items": { "type": "string" } },
+        "followups": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "fingerprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_digest", "lockfiles", "toolchain"],
+      "properties": {
+        "input_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "lockfiles": { "type": "object", "additionalProperties": { "type": "string" } },
+        "toolchain": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "created_at": { "type": "string", "format": "date-time" }
+  }
+}

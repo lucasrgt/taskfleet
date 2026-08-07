@@ -4,6 +4,17 @@ schema = 1
 repository = "."
 database = ".taskfleet/state.sqlite"
 worktree_root = "../.taskfleet-worktrees"
+cas_root = ".taskfleet/cas"
+workspace_provider = "git-worktree"
+cas_retention_seconds = 604800
+# max_parallel_workspaces = 4
+# retain_integration_worktree = false
+# cas_max_bytes = 10737418240
+# [project.shared_caches]
+# pnpm_store = "../.caches/pnpm"
+# nuget_packages = "../.caches/nuget"
+# cargo_home = "../.caches/cargo"
+# sccache_dir = "../.caches/sccache"
 
 [[view]]
 id = "all"

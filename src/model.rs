@@ -13,10 +13,32 @@ pub struct Config { #[serde(default = "schema")] pub schema: u32, #[serde(defaul
 
 #[rustfmt::skip]
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Project { #[serde(default = "dot")] pub repository: PathBuf, #[serde(default = "database")] pub database: PathBuf, #[serde(default = "worktrees")] pub worktree_root: PathBuf, pub default_workflow: Option<String> }
+pub struct Project {
+    #[serde(default = "dot")] pub repository: PathBuf,
+    #[serde(default = "database")] pub database: PathBuf,
+    #[serde(default = "worktrees")] pub worktree_root: PathBuf,
+    #[serde(default = "cas_root")] pub cas_root: PathBuf,
+    #[serde(default = "workspace_provider")] pub workspace_provider: String,
+    #[serde(default)] pub shared_caches: std::collections::BTreeMap<String, PathBuf>,
+    #[serde(default = "cas_retention")] pub cas_retention_seconds: i64,
+    pub cas_max_bytes: Option<u64>,
+    #[serde(default)] pub agentfs_bin: Option<PathBuf>,
+    #[serde(default)] pub max_parallel_workspaces: u32,
+    #[serde(default = "retain_integration")] pub retain_integration_worktree: bool,
+    pub default_workflow: Option<String>,
+}
 
 #[rustfmt::skip]
-impl Default for Project { fn default() -> Self { Self { repository: dot(), database: database(), worktree_root: worktrees(), default_workflow: None } } }
+impl Default for Project {
+    fn default() -> Self {
+        Self {
+            repository: dot(), database: database(), worktree_root: worktrees(), cas_root: cas_root(),
+            workspace_provider: workspace_provider(), shared_caches: Default::default(),
+            cas_retention_seconds: cas_retention(), cas_max_bytes: None, agentfs_bin: None,
+            max_parallel_workspaces: 0, retain_integration_worktree: retain_integration(), default_workflow: None,
+        }
+    }
+}
 
 #[rustfmt::skip]
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -66,6 +88,19 @@ impl Config {
         value.project.repository = absolute(base, &value.project.repository);
         value.project.database = absolute(base, &value.project.database);
         value.project.worktree_root = absolute(base, &value.project.worktree_root);
+        value.project.cas_root = absolute(base, &value.project.cas_root);
+        value.project.shared_caches = value
+            .project
+            .shared_caches
+            .into_iter()
+            .map(|(key, path)| (key, absolute(base, &path)))
+            .collect();
+        if let Some(path) = &value.project.agentfs_bin {
+            value.project.agentfs_bin = Some(absolute(base, path));
+        }
+        if !matches!(value.project.workspace_provider.as_str(), "git-worktree" | "agentfs" | "reflink") {
+            bail!("unsupported workspace_provider {}", value.project.workspace_provider);
+        }
         unique("view", value.views.iter().map(|item| item.id.as_str()))?;
         unique("workflow", value.workflows.iter().map(|item| item.id.as_str()))?;
         unique("gate", value.gates.iter().map(|item| item.id.as_str()))?;
@@ -174,6 +209,10 @@ fn compare(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
 #[rustfmt::skip] fn dot() -> PathBuf { ".".into() }
 #[rustfmt::skip] fn database() -> PathBuf { ".taskfleet/state.sqlite".into() }
 #[rustfmt::skip] fn worktrees() -> PathBuf { "../.taskfleet-worktrees".into() }
+#[rustfmt::skip] fn cas_root() -> PathBuf { ".taskfleet/cas".into() }
+#[rustfmt::skip] fn workspace_provider() -> String { "git-worktree".into() }
+#[rustfmt::skip] fn cas_retention() -> i64 { 604_800 }
+#[rustfmt::skip] fn retain_integration() -> bool { false }
 #[rustfmt::skip] fn command_kind() -> String { "command".into() }
 #[rustfmt::skip] fn gate_events() -> Vec<String> { vec!["step.complete".into()] }
 #[rustfmt::skip] fn timeout() -> u64 { 900 }
