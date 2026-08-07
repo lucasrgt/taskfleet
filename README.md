@@ -32,7 +32,8 @@ lives in `.taskfleet/state.sqlite`.
 <tr><td><b>One store, many boards</b></td><td>Saved structured views project the same tasks without duplication.</td></tr>
 <tr><td><b>Safe multi-agent work</b></td><td>Atomic claims, bounded leases, heartbeats, dependencies, and reconciliation coordinate workers.</td></tr>
 <tr><td><b>Repository-owned policy</b></td><td>Ordered workflows may require command or approval gates before every step.</td></tr>
-<tr><td><b>Isolated implementation</b></td><td>Deterministic Git branches and worktrees keep concurrent tasks separated.</td></tr>
+<tr><td><b>Isolated implementation</b></td><td>Workspace capsules keep concurrent tasks separated and sync ready dependency branches.</td></tr>
+<tr><td><b>Typed handoffs</b></td><td>TaskReceipts in a local CAS let dependents recover declared outputs without old worktrees.</td></tr>
 <tr><td><b>Proven consolidation</b></td><td>Candidate branches merge sequentially and gates run again on the combined tree.</td></tr>
 <tr><td><b>Tracker and agent independent</b></td><td>Arbitrary source metadata enters through stable JSON contracts exposed equally by CLI and MCP.</td></tr>
 </table>
@@ -123,11 +124,12 @@ Claim one ready task from a saved view:
 taskfleet task.claim --input '{"owner":"codex-website-1","view":"website"}'
 ```
 
-Prepare its isolated worktree, implement and commit the change, run the active
-step's gates, then advance:
+Prepare its isolated workspace, implement and commit the change, run the active
+step's gates, then advance. Publish a TaskReceipt so dependents can call
+`task.context` without reopening this workspace:
 
 ```bash
-taskfleet worktree.prepare --input \
+taskfleet workspace.prepare --input \
   '{"task":"fibery://hostpoint/tasks/42","base":"origin/main"}'
 
 taskfleet gate.run --input \
@@ -137,6 +139,9 @@ taskfleet step.advance --input \
   '{"task":"fibery://hostpoint/tasks/42","owner":"codex-website-1"}'
 ```
 
+Dependencies unblock at `candidate` or `done`. `workspace.prepare` merges each
+ready dependency candidate branch into the new workspace. `worktree.prepare`
+remains a compatibility alias.
 Repeat gates and advancement for each step. After the final step, the task is a
 `candidate`. Consolidate all matching candidates:
 
@@ -160,6 +165,9 @@ schema = 1
 repository = "."
 database = ".taskfleet/state.sqlite"
 worktree_root = "../.taskfleet-worktrees"
+cas_root = ".taskfleet/cas"
+workspace_provider = "git-worktree"
+cas_retention_seconds = 604800
 default_workflow = "delivery"
 
 [[view]]
@@ -293,14 +301,26 @@ Run `taskfleet methods` for machine-readable tool metadata.
 | `task.get` | Read the full dossier, active step, tree, and gate status |
 | `task.claim` | Atomically lease ready tasks to one worker |
 | `task.heartbeat` | Extend a worker's lease |
-| `worktree.prepare` | Create or recover the task branch and worktree |
+| `workspace.prepare` | Create a pooled workspace (cap via `max_parallel_workspaces`) and merge ready dependency branches |
+| `worktree.prepare` | Compatibility alias for `workspace.prepare` |
+| `workspace.status` | Report workspace cleanliness, branch, and tree |
+| `workspace.diff` | Show porcelain status and patch |
+| `workspace.destroy` | Destroy a workspace while preserving receipts and CAS |
+| `workspace.gc` | Garbage-collect unreachable CAS blobs |
 | `gate.run` | Execute and record a command gate |
 | `gate.approve` | Record an explicit approval decision |
 | `step.advance` | Advance only with current required proofs |
 | `task.block` | Stop work with a visible reason |
 | `task.retry` | Return a blocked task to the backlog |
-| `integration.run` | Merge candidates and re-run integration gates |
-| `reconcile` | Expire dead leases and prune worktree records |
+| `task.context` | Recover declared dependency receipts without old workspaces |
+| `artifact.publish` | Store bytes or a file in the local CAS |
+| `artifact.resolve` | Resolve a CAS digest to its storage path |
+| `artifact.materialize` | Materialize a CAS blob to a path (CoW when available) |
+| `receipt.publish` | Publish a validated TaskReceipt |
+| `receipt.get` | Get a TaskReceipt by digest or latest for a task |
+| `receipt.resolve_dependencies` | Walk dependency receipts linked from a TaskReceipt |
+| `integration.run` | Merge candidates, re-run gates; drop integration worktree unless retained |
+| `reconcile` | Expire leases, destroy leftover task worktrees, prune, and GC the CAS |
 
 `task.query` accepts `view`, `filter`, `states`, `ready`, `full`, and `limit`.
 `task.claim` accepts the same selection fields plus `owner`, `lease_seconds`,
@@ -378,14 +398,27 @@ cargo install cargo-llvm-cov tokei --locked
 cargo xtask verify
 ```
 
+### Miniapp production smoke
+
+[`examples/miniapp`](examples/miniapp) is a tiny product checkout with a real
+`scripts/verify` gate. The smoke test materializes it, fails the gate when a
+required feature is missing, then runs a multi-agent delivery (auth → health →
+ship) with receipts, `task.context`, workspace dependency merges, and
+integration:
+
+```bash
+cargo test --package taskfleet --test smoke_miniapp -- --nocapture
+```
+
 `cargo xtask verify` is the canonical local, CI, and release gate:
 
 | Invariant | Gate |
 | --- | --- |
-| Maintained production code | At most 1,100 lines; at most 400 per file |
+| Maintained production code | At most 500 tokei code lines per production file |
 | Shared runtime line coverage | At least 95 percent without rounding |
 | Code quality | rustfmt and Clippy with warnings denied |
 | Packaged surface | End-to-end CLI binary and MCP protocol tests |
+| Miniapp smoke | Production-shaped delivery against `examples/miniapp` |
 | Storage | Transactional SQLite with dependency and lease tests |
 | Git execution | Real temporary repositories and worktrees |
 

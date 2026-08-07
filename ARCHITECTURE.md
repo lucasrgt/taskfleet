@@ -5,8 +5,8 @@
 Taskfleet owns execution state, not tracker synchronization and not agent
 reasoning. An agent or connector reads Fibery, Jira, ClickUp, Monday.com, or
 another source and normalizes each item into the `Task` contract. Taskfleet
-then owns deduplication, views, dependencies, claims, gates, worktrees, and
-integration until a task reaches `done`.
+then owns deduplication, views, dependencies, claims, gates, workspaces,
+content-addressed receipts, and integration until a task reaches `done`.
 
 ```text
 tracker / connector / agent
@@ -15,12 +15,12 @@ tracker / connector / agent
             v
   CLI ---- shared Service ---- MCP
                  |
-        +--------+---------+
-        |                  |
-   SQLite/WAL          Git worktrees
-        |                  |
- views, leases,       gates, branches,
- state, receipts       integration
+        +--------+---------+----------+
+        |                  |          |
+   SQLite/WAL          workspaces    CAS
+        |                  |          |
+ views, leases,       gates,       TaskReceipt
+ state, gate proofs   branches     artifacts
 ```
 
 The CLI accepts one JSON object from `--input` or standard input. The stdio MCP
@@ -52,42 +52,67 @@ last step --step.advance--> candidate --integration.run--> done
                                       \--conflict/gate----> blocked
 ```
 
-A claim is an atomic lease. Dependencies must be `done` before a task is ready.
-Routes choose a workflow from task data; an explicit task workflow wins, then
-the first matching route, then the project default. With no workflow, Taskfleet
-uses one implicit `execute` step with no gates.
+A claim is an atomic lease. Dependencies unblock when blockers reach
+`candidate` or `done`, so a downstream wave can start after upstream workflows
+finish without waiting for final integration. Routes choose a workflow from
+task data; an explicit task workflow wins, then the first matching route, then
+the project default. With no workflow, Taskfleet uses one implicit `execute`
+step with no gates.
 
 Before an agent advances a step, every applicable required gate referenced by
-that step must have a green receipt for the current clean Git tree. Command
-gates receive a JSON execution context on standard input, run without a shell,
-have a timeout, capture bounded output, and fail if they modify tracked files.
-Approval gates require an explicit actor and decision. Optional red gates are
-recorded but do not block advancement.
+that step must have a green gate receipt for the current clean Git tree.
+Command gates receive a JSON execution context on standard input, run without a
+shell, have a timeout, capture bounded output, and fail if they modify tracked
+files. Approval gates require an explicit actor and decision. Optional red
+gates are recorded but do not block advancement.
 
-## Git isolation and integration
+## Workspace capsules
 
-Each claimed task gets a deterministic `taskfleet/*` branch and worktree.
-Existing branches are reused after stale worktree records are pruned. Finishing
-the final workflow step removes the worktree but keeps its branch as a
-candidate.
+`workspace.prepare` (aliased by `worktree.prepare`) creates an isolated
+workspace through the configured provider (`git-worktree` by default, `agentfs`
+when the CLI is available, or `reflink` to advertise CoW-friendly materialize).
+It then merges each ready dependency's candidate branch so downstream agents
+start with upstream code. When `max_parallel_workspaces` is set, prepare fails
+closed once that many live worktrees exist and reuses `pool-{n}` slots after
+destroy. Shared cache paths from `project.shared_caches` are created on prepare
+and returned as environment hints; Taskfleet never shares arbitrary mutable
+directories between agents. Artifact materialize prefers filesystem CoW
+(`cp --reflink` / `cp -c`) when the OS supports it.
+
+Gates remain bound to a clean Git tree. Destroying a workspace never deletes
+CAS blobs or TaskReceipt records. `workspace.gc` and `reconcile` remove
+unreachable blobs by mark-and-sweep against open tasks, pins, and retention.
+`reconcile` also destroys leftover task worktrees on `candidate`, `done`, and
+`backlog` rows.
+
+## Task receipts and context
+
+Completed work publishes a `TaskReceipt` into the local CAS. Downstream tasks
+call `task.context` to recover declared exports, paths, proofs, and artifacts
+without reopening predecessor workspaces. Missing dependency receipts fail
+closed.
+
+## Integration
 
 `integration.run` creates a dedicated integration branch and worktree, orders
 candidates by their dependencies, and merges them one at a time. After each
 staged merge, all matching `integration.merge` command gates run against the
 combined tree. A conflict or failed required gate aborts only that merge and
 blocks that task; already integrated tasks remain committed and marked `done`.
-The returned branch is the artifact a harness may review, push, or merge.
+Unless `retain_worktree` / `retain_integration_worktree` is true, the
+integration worktree is deleted after consolidation; the branch remains.
 
 ## Persistence and recovery
 
 SQLite runs in WAL mode. Task ingestion, dependency replacement, cycle checks,
-claims, receipts, and transitions use transactions. A receipt includes task,
-step, gate, Git tree, verdict, output, and timestamp. Changing the tree makes a
-previous receipt irrelevant without mutating history.
+claims, gate receipts, TaskReceipt metadata, and transitions use transactions.
+Gate receipts include task, step, gate, Git tree, verdict, output, and
+timestamp. Changing the tree makes a previous gate receipt irrelevant without
+mutating history.
 
-`reconcile` expires dead leases back to `backlog` and prunes stale Git worktree
-metadata. Blocked tasks require an explicit `task.retry`, keeping failures
-visible to every agent and harness.
+`reconcile` expires dead leases back to `backlog`, prunes stale Git worktree
+metadata, and garbage-collects unreachable CAS content. Blocked tasks require
+an explicit `task.retry`, keeping failures visible to every agent and harness.
 
 ## Deliberate exclusions
 

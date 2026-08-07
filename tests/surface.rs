@@ -38,7 +38,7 @@ fn mcp_advertises_and_calls_the_same_core() {
         .collect::<Vec<_>>();
     assert_eq!(responses.len(), 5);
     assert_eq!(responses[0]["result"]["serverInfo"]["name"], "taskfleet");
-    assert!(responses[1]["result"]["tools"].as_array().unwrap().len() >= 14);
+    assert!(responses[1]["result"]["tools"].as_array().unwrap().len() >= 20);
     let query = responses[1]["result"]["tools"]
         .as_array()
         .unwrap()

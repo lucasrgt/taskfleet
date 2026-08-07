@@ -142,7 +142,10 @@ command = ["git", "status", "--porcelain"]
     assert_eq!(integrated["merged"].as_array().unwrap().len(), 2);
     assert!(integrated["blocked"].as_array().unwrap().is_empty());
     assert_eq!(service.call("task.query", &json!({"states":["done"]})).unwrap().as_array().unwrap().len(), 2);
-    let log = run(Path::new(integrated["worktree"].as_str().unwrap()), &["log", "--oneline"]);
+    assert!(integrated["worktree"].is_null());
+    assert_eq!(integrated["retained"], false);
+    let branch = integrated["branch"].as_str().unwrap();
+    let log = run(&fixture.repo, &["log", branch, "--oneline"]);
     assert!(log.contains("Integrate task://a") && log.contains("Integrate task://b"));
 }
 

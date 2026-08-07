@@ -1,0 +1,2 @@
+# health
+status endpoint returns ok

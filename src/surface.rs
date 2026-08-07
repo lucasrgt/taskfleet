@@ -21,10 +21,15 @@ const METHODS: &[(&str, &str, &[&str])] = &[
     ("task.claim", "Atomically lease ready tasks selected by view/filter", &["owner"]),
     ("task.heartbeat", "Renew a task lease owned by a worker", &["task", "owner"]),
     (
-        "worktree.prepare",
-        "Create or reuse the isolated Git branch and worktree for a claimed task",
+        "workspace.prepare",
+        "Create or reuse an isolated workspace and merge ready dependency branches",
         &["task"],
     ),
+    ("workspace.status", "Report workspace cleanliness, branch, and tree", &["task"]),
+    ("workspace.diff", "Show porcelain status and patch for a task workspace", &["task"]),
+    ("workspace.destroy", "Destroy a task workspace while preserving receipts and CAS", &["task"]),
+    ("workspace.gc", "Garbage-collect unreachable CAS blobs and metadata", &[]),
+    ("worktree.prepare", "Compatibility alias for workspace.prepare", &["task"]),
     (
         "gate.run",
         "Run a command gate for the active step and record a tree-bound receipt",
@@ -42,8 +47,23 @@ const METHODS: &[(&str, &str, &[&str])] = &[
     ),
     ("task.block", "Block a task with a visible reason", &["task", "reason"]),
     ("task.retry", "Return a blocked task to the claimable backlog", &["task"]),
+    (
+        "task.context",
+        "Recover declared dependency receipts and artifacts without opening old workspaces",
+        &["task"],
+    ),
+    ("artifact.publish", "Store bytes or a file in the local content-addressable store", &[]),
+    ("artifact.resolve", "Resolve a CAS digest to its storage path", &["digest"]),
+    ("artifact.materialize", "Materialize a CAS blob to a destination path", &["digest", "path"]),
+    ("receipt.publish", "Publish a validated TaskReceipt into CAS and SQLite", &[]),
+    ("receipt.get", "Get a TaskReceipt by digest or latest for a task", &[]),
+    (
+        "receipt.resolve_dependencies",
+        "Resolve dependency receipts linked from a TaskReceipt",
+        &["digest"],
+    ),
     ("integration.run", "Merge candidate branches sequentially and re-prove integration gates", &[]),
-    ("reconcile", "Expire dead leases and prune stale Git worktree records", &[]),
+    ("reconcile", "Expire dead leases, prune worktrees, and garbage-collect CAS", &[]),
 ];
 
 pub fn run_cli_at(args: Vec<OsString>, current: &Path, input: &mut dyn Read, output: &mut dyn Write) -> Result<i32> {
@@ -62,7 +82,7 @@ pub fn run_cli_at(args: Vec<OsString>, current: &Path, input: &mut dyn Read, out
         "--version" | "-V" => writeln!(output, "taskfleet {}", env!("CARGO_PKG_VERSION"))?,
         "init" => {
             init(&config)?;
-            writeln!(output, "{}", json!({"config":config,"initialized":true}))?;
+            writeln!(output, "{}", json!({"config": config, "initialized": true}))?;
         }
         "methods" => writeln!(output, "{}", serde_json::to_string_pretty(&tools())?)?,
         "mcp" => {
@@ -96,7 +116,7 @@ pub fn mcp_stream(config: &Path, input: &mut dyn BufRead, output: &mut dyn Write
             "initialize" => {
                 json!({"protocolVersion":"2025-06-18","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"taskfleet","version":env!("CARGO_PKG_VERSION")}})
             }
-            "tools/list" => json!({"tools":tools()}),
+            "tools/list" => json!({"tools": tools()}),
             "tools/call" => {
                 let name = request["params"]["name"].as_str().unwrap_or("");
                 let method = name.strip_prefix("taskfleet_").unwrap_or("").replace('_', ".");
@@ -118,14 +138,49 @@ pub fn mcp_stream(config: &Path, input: &mut dyn BufRead, output: &mut dyn Write
 }
 
 pub fn tools() -> Vec<Value> {
-    METHODS.iter().map(|(method, description, required)| {
-        let name = format!("taskfleet_{}", method.replace('.', "_"));
-        let properties = required.iter().chain(optionals(method)).map(|name| ((*name).to_owned(), match *name { "approved" | "ready" | "full" => json!({"type":"boolean"}), "limit" | "lease_seconds" => json!({"type":"integer"}), "tasks" => json!({"type":"array","items":{"type":"object"}}), "states" => json!({"type":"array","items":{"type":"string"}}), "filter" => json!({"type":"object"}), _ => json!({"type":"string"}) })).collect::<serde_json::Map<_,_>>();
-        json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":true}})
-    }).collect()
+    METHODS
+        .iter()
+        .map(|(method, description, required)| {
+            let name = format!("taskfleet_{}", method.replace('.', "_"));
+            let properties = required
+                .iter()
+                .chain(optionals(method))
+                .map(|name| {
+                    (
+                        (*name).to_owned(),
+                        match *name {
+                            "approved" | "ready" | "full" | "pin" => json!({"type":"boolean"}),
+                            "limit" | "lease_seconds" | "budget_bytes" => json!({"type":"integer"}),
+                            "tasks" => json!({"type":"array","items":{"type":"object"}}),
+                            "include" | "states" => json!({"type":"array","items":{"type":"string"}}),
+                            "filter" | "receipt" => json!({"type":"object"}),
+                            _ => json!({"type":"string"}),
+                        },
+                    )
+                })
+                .collect::<serde_json::Map<_, _>>();
+            json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":true}})
+        })
+        .collect()
 }
 
-#[rustfmt::skip] fn optionals(method: &str) -> &'static [&'static str] { match method { "task.query" => &["view","filter","states","ready","full","limit"], "task.claim" => &["view","filter","limit","lease_seconds"], "task.heartbeat" => &["lease_seconds"], "worktree.prepare" => &["base"], "gate.approve" => &["note"], "integration.run" => &["view","filter","base","branch"], _ => &[] } }
+#[rustfmt::skip]
+fn optionals(method: &str) -> &'static [&'static str] {
+    match method {
+        "task.query" => &["view", "filter", "states", "ready", "full", "limit"],
+        "task.claim" => &["view", "filter", "limit", "lease_seconds"],
+        "task.heartbeat" => &["lease_seconds"],
+        "workspace.prepare" | "worktree.prepare" => &["base"],
+        "gate.approve" => &["note"],
+        "step.advance" => &["receipt"],
+        "task.context" => &["include", "budget_bytes"],
+        "artifact.publish" => &["bytes", "path", "media_type", "pin", "note"],
+        "receipt.publish" => &["receipt"],
+        "receipt.get" => &["digest", "task"],
+        "integration.run" => &["view", "filter", "base", "branch", "retain_worktree"],
+        _ => &[],
+    }
+}
 
 fn take_option(args: &mut Vec<String>, name: &str) -> Option<String> {
     let index = args.iter().position(|arg| arg == name)?;

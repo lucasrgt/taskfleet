@@ -1,0 +1,41 @@
+schema = 1
+
+# Example policy for the miniapp product. Smoke tests copy this into a
+# temporary git checkout and rewrite absolute paths as needed.
+
+[project]
+repository = "."
+database = ".taskfleet/state.sqlite"
+worktree_root = "../.taskfleet-worktrees"
+cas_root = ".taskfleet/cas"
+workspace_provider = "git-worktree"
+cas_retention_seconds = 604800
+default_workflow = "delivery"
+
+[[view]]
+id = "all"
+filter = { op = "true" }
+
+[[view]]
+id = "ready-backend"
+filter = { op = "eq", path = "meta.platform", value = "backend" }
+
+[[gate]]
+id = "miniapp-verify"
+kind = "command"
+command = ["./scripts/verify"]
+events = ["step.complete", "integration.merge"]
+timeout_seconds = 120
+required = true
+
+[[workflow]]
+id = "delivery"
+
+[[workflow.step]]
+id = "implement"
+title = "Implement and prove the miniapp surface"
+gates = ["miniapp-verify"]
+
+[[route]]
+workflow = "delivery"
+when = { op = "true" }

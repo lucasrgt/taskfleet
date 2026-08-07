@@ -1,0 +1,6 @@
+{
+  "name": "miniapp",
+  "version": "0.1.0",
+  "required_features": ["health", "auth"],
+  "owner": "taskfleet-smoke"
+}
