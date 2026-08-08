@@ -64,6 +64,9 @@ then an enabled external enrollment.
 /fleet purge
 /fleet status [task]
 /fleet board [on|off|refresh] [view]
+/fleet spawn <workflow> [title]     # pipeline run (new uri, respects max_runs)
+/fleet rerun <task>                 # new run of an existing pipeline task
+/fleet related <task> [path]        # linked objectives sharing meta.bundle (or path)
 /fleet pause <task>
 /fleet resume <task>
 /fleet cancel <task> [reason]
@@ -71,7 +74,10 @@ then an enabled external enrollment.
 /fleet reprioritize <task> <integer>
 ```
 
-`/fleet priority` is a short alias for `/fleet reprioritize`.
+`/fleet priority` is a short alias for `/fleet reprioritize`. The Kanban shows
+the active workflow (`wf:<workflow>`) on each pipeline card, and `/fleet status
+<task>` prints the pipeline series/run plus the active step instruction and
+merged args.
 
 The board appears as a TUI widget when a configuration is found. It is
 observability only: backlog, ready, running, paused, blocked, candidate, failed,

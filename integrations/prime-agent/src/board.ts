@@ -26,10 +26,11 @@ function cardLine(card: FleetCard): string {
   const priority = card.queue_priority ? ` p${card.queue_priority > 0 ? "+" : ""}${card.queue_priority}` : "";
   const deps = card.depends_on.length ? ` ←${card.depends_on.map((uri) => uri.split("/").at(-1)).join(",")}` : "";
   const step = card.step_name ? ` ${card.step_name}` : "";
+  const workflow = card.workflow ? ` wf:${card.workflow}` : "";
   const gate = card.gates.length ? ` g:${card.gates.map((item) => item.status[0] ?? "?").join("")}` : "";
   const lease = card.lease_until ? ` l:${card.lease_until}` : "";
   const error = card.error ? ` !${card.error}` : "";
-  return `• ${card.title}${priority}${owner}${lease}${deps}${step}${gate}${error}`;
+  return `• ${card.title}${priority}${owner}${lease}${deps}${workflow}${step}${gate}${error}`;
 }
 
 export function groupCards(snapshot: FleetSnapshot): Record<FleetColumn, FleetCard[]> {

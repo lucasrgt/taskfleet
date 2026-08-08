@@ -37,3 +37,12 @@ test("board renders within terminal width", () => {
     assert.ok(lines.every((line) => line.length <= width));
   }
 });
+
+test("pipeline cards carry the workflow marker", () => {
+  const snapshot: FleetSnapshot = { at: 1, cards: [
+    { ...card("running", { workflow: "delivery" }), depends_on: [], gates: [] },
+    card("done"),
+  ] };
+  const rendered = renderBoard(snapshot, 100).join("\n");
+  assert.ok(rendered.includes("wf:delivery"));
+});

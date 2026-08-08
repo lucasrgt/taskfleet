@@ -26,6 +26,8 @@ export interface TaskSummary {
   paused?: boolean;
   queue_priority?: number;
   step?: number;
+  /** Active pipeline workflow id (0.2.1+). */
+  workflow?: string | null;
 }
 
 export interface TaskStatus {
@@ -34,6 +36,8 @@ export interface TaskStatus {
     title: string;
     priority?: string | null;
     depends_on?: string[];
+    workflow?: string | null;
+    meta?: Record<string, unknown>;
   };
   execution: {
     state: string;
@@ -43,9 +47,34 @@ export interface TaskStatus {
     paused?: boolean;
     queue_priority?: number;
     step_index?: number;
-    active_step?: { id: string } | null;
+    active_step?: { id: string; instruction?: string; args?: Record<string, unknown> } | null;
     gates?: Array<{ id: string; required: boolean; status: string }>;
   };
+}
+
+/** One task sharing the same dossier meta path value (task.related). */
+export interface RelatedObjective {
+  uri: string;
+  title: string;
+  role?: unknown;
+  tags?: string[];
+  priority?: string | null;
+  depends_on?: string[];
+  queue_priority?: number;
+  state: string;
+  paused?: boolean;
+  ready: boolean;
+  owner?: string | null;
+  error?: string | null;
+  revision?: number;
+}
+
+export interface RelatedResult {
+  task: string;
+  path: string;
+  value: unknown;
+  count: number;
+  related: RelatedObjective[];
 }
 
 export interface FleetCard extends TaskSummary {

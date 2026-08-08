@@ -1,7 +1,7 @@
 import type { TaskfleetClient } from "./client.ts";
 import type { ChildController } from "./controller.ts";
 import { snapshotText } from "./board.ts";
-import type { FleetLocation, FleetSnapshot, TaskStatus, TaskSummary } from "./types.ts";
+import type { FleetLocation, FleetSnapshot, RelatedResult, TaskStatus, TaskSummary } from "./types.ts";
 
 export interface FleetCommandRuntime {
   client?: TaskfleetClient;
@@ -18,7 +18,7 @@ export interface FleetCommandRuntime {
   confirm(title: string, message: string): Promise<boolean>;
 }
 
-const HELP = "Usage: /fleet enable external | disable | purge | status [task] | board [on|off|refresh] [view] | pause <task> | resume <task> | cancel <task> [reason] | retry <task> | reprioritize <task> <integer>";
+const HELP = "Usage: /fleet enable external | disable | purge | status [task] | board [on|off|refresh] [view] | spawn <workflow> [title] | rerun <task> | related <task> [path] | pause <task> | resume <task> | cancel <task> [reason] | retry <task> | reprioritize <task> <integer>";
 
 function requireClient(runtime: FleetCommandRuntime): TaskfleetClient {
   if (!runtime.client) throw new Error("Taskfleet is not enabled; use /fleet enable external");
@@ -33,10 +33,23 @@ function locationText(location?: FleetLocation): string {
 function taskText(status: TaskStatus): string {
   const execution = status.execution;
   const gates = (execution.gates ?? []).map((gate) => `${gate.id}:${gate.status}${gate.required ? "!" : ""}`).join(", ") || "none";
+  const meta = status.task.meta ?? {};
+  const pipeline = status.task.workflow
+    ? `workflow=${status.task.workflow}${typeof meta.series === "string" ? ` series=${meta.series}` : ""}${typeof meta.run === "number" ? ` run=${meta.run}` : ""}`
+    : "";
+  const instruction = execution.active_step?.instruction
+    ? `instruction=${execution.active_step.instruction}`
+    : "";
+  const args = execution.active_step?.args && Object.keys(execution.active_step.args).length > 0
+    ? `args=${JSON.stringify(execution.active_step.args)}`
+    : "";
   return [
     `${status.task.title} (${status.task.uri})`,
     `state=${execution.state}${execution.paused ? " paused" : ""} owner=${execution.owner ?? "-"} priority=${execution.queue_priority ?? 0}`,
     `step=${execution.active_step?.id ?? execution.step_index ?? "-"} lease=${execution.lease_until ?? "-"}`,
+    pipeline,
+    instruction,
+    args,
     `depends=${(status.task.depends_on ?? []).join(", ") || "none"}`,
     `gates=${gates}`,
     execution.error ? `error=${execution.error}` : "",
@@ -110,6 +123,16 @@ export async function dispatchFleet(args: string, runtime: FleetCommandRuntime):
       else await runtime.setBoard(true, mode);
       return;
     }
+    if (action === "spawn") {
+      requireClient(runtime);
+      const workflow = tokens.shift();
+      if (!workflow) throw new Error("Usage: /fleet spawn <workflow> [title]");
+      const title = tokens.join(" ") || undefined;
+      const spawned = await runtime.client!.call<TaskStatus>("task.spawn", title ? { workflow, title } : { workflow });
+      await runtime.refresh();
+      runtime.notify(`spawned ${spawned.task.uri} (pipeline ${workflow}${typeof spawned.task.meta?.run === "number" ? `, run ${spawned.task.meta.run}` : ""})`, "info");
+      return;
+    }
     const task = tokens.shift();
     if (!task) throw new Error(HELP);
     const client = requireClient(runtime);
@@ -126,6 +149,22 @@ export async function dispatchFleet(args: string, runtime: FleetCommandRuntime):
       await client.call("task.reprioritize", { task, priority });
       await runtime.refresh();
       runtime.notify(`${task} queue priority is now ${priority}`, "info");
+      return;
+    }
+    if (action === "rerun") {
+      const spawned = await client.call<TaskStatus>("task.rerun", { task });
+      await runtime.refresh();
+      runtime.notify(`reran ${task} -> ${spawned.task.uri}${typeof spawned.task.meta?.run === "number" ? ` (run ${spawned.task.meta.run})` : ""}`, "info");
+      return;
+    }
+    if (action === "related") {
+      const path = tokens[0];
+      const result = await client.call<RelatedResult>("task.related", path ? { task, path } : { task });
+      const lines = [`${result.task} shares ${result.path}=${JSON.stringify(result.value)} with ${result.count} objective(s):`];
+      for (const item of result.related) {
+        lines.push(`- ${item.uri} ${item.title}${item.role !== undefined && item.role !== null ? ` (${String(item.role)})` : ""} [${item.state}${item.ready ? "/ready" : ""}]`);
+      }
+      runtime.notify(lines.join("\n"), "info");
       return;
     }
     if (action === "pause" || action === "cancel") {
@@ -147,14 +186,14 @@ export async function dispatchFleet(args: string, runtime: FleetCommandRuntime):
 }
 
 export function fleetCompletions(prefix: string, snapshot?: FleetSnapshot): Array<{ value: string; label: string; description?: string }> | null {
-  const actions = ["enable", "disable", "purge", "status", "board", "pause", "resume", "cancel", "retry", "reprioritize", "priority", "help"];
+  const actions = ["enable", "disable", "purge", "status", "board", "spawn", "rerun", "related", "pause", "resume", "cancel", "retry", "reprioritize", "priority", "help"];
   const tokens = prefix.split(/\s+/);
   if (tokens.length <= 1) {
     const items = actions.filter((action) => action.startsWith(tokens[0] ?? "")).map((action) => ({ value: action, label: action }));
     return items.length ? items : null;
   }
   const action = tokens[0];
-  if (!["status", "pause", "resume", "cancel", "retry", "reprioritize", "priority"].includes(action)) return null;
+  if (!["status", "rerun", "related", "pause", "resume", "cancel", "retry", "reprioritize", "priority"].includes(action)) return null;
   const fragment = tokens.at(-1) ?? "";
   const items = (snapshot?.cards ?? []).filter((card) => card.uri.startsWith(fragment)).map((card) => ({ value: `${action} ${card.uri}`, label: card.uri, description: card.title }));
   return items.length ? items : null;

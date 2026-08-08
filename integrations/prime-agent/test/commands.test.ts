@@ -15,8 +15,11 @@ function fixture() {
   const client = { call: async (method: string, input: unknown) => {
     calls.push([method, input]);
     if (method === "task.pause" || method === "task.cancel") return { owner: "tf-one" };
-    if (method === "task.get") return { task: { uri: "task://one", title: "One", depends_on: [] }, execution: { state: "running", owner: "tf-one", gates: [] } };
+    if (method === "task.get") return { task: { uri: "task://one", title: "One", depends_on: [], workflow: "delivery", meta: { series: "s1", run: 2 } }, execution: { state: "running", owner: "tf-one", gates: [], active_step: { id: "implement", instruction: "do it", args: { env: "test" } } } };
     if (method === "task.query") return [];
+    if (method === "task.spawn") return { task: { uri: "task://spawned", title: "Spawned", depends_on: [], workflow: "delivery", meta: { series: "s1", run: 3 } }, execution: { state: "backlog", gates: [] } };
+    if (method === "task.rerun") return { task: { uri: "task://reran", title: "Reran", depends_on: [], workflow: "delivery", meta: { series: "s1", run: 4 } }, execution: { state: "backlog", gates: [] } };
+    if (method === "task.related") return { task: "task://one", path: "meta.bundle", value: "b-1", count: 1, related: [{ uri: "task://two", title: "Two", role: "frontend", state: "ready", ready: true }] };
     return {};
   } } as unknown as TaskfleetClient;
   const runtime: FleetCommandRuntime = {
@@ -51,6 +54,28 @@ test("pause and cancel forward native controls and target only the associated ch
   assert.deepEqual(cancelled, [["parent", "tf-one"], ["parent", "tf-one"]]);
 });
 
+
+test("spawn, rerun, and related drive the pipeline surface", async () => {
+  const { runtime, calls, notices } = fixture();
+  await dispatchFleet("spawn delivery Nova entrega", runtime);
+  await dispatchFleet("rerun task://one", runtime);
+  await dispatchFleet("related task://one", runtime);
+  assert.deepEqual(calls.slice(0, 3), [
+    ["task.spawn", { workflow: "delivery", title: "Nova entrega" }],
+    ["task.rerun", { task: "task://one" }],
+    ["task.related", { task: "task://one" }],
+  ]);
+  assert.ok(notices.some(([message]) => message.includes("task://spawned") && message.includes("run 3")));
+  assert.ok(notices.some(([message]) => message.includes("task://reran") && message.includes("run 4")));
+  assert.ok(notices.some(([message]) => message.includes("task://two") && message.includes("(frontend)") && message.includes("[ready/ready]")));
+});
+
+test("spawn requires a workflow and related accepts an optional path", async () => {
+  const { runtime, calls } = fixture();
+  await dispatchFleet("spawn", runtime);
+  await dispatchFleet("related task://one meta.objective", runtime);
+  assert.deepEqual(calls.slice(0, 1), [["task.related", { task: "task://one", path: "meta.objective" }]]);
+});
 
 test("shared Taskfleet owners are not treated as an exact child binding", async () => {
   const { runtime, cancelled, notices } = fixture();

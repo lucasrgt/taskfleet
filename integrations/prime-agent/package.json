@@ -1,6 +1,6 @@
 {
   "name": "taskfleet-prime-agent",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Thin Prime Agent TUI and lifecycle adapter for the Taskfleet Rust core",
   "type": "module",
   "keywords": [
