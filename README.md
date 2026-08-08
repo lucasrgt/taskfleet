@@ -302,6 +302,7 @@ Run `taskfleet methods` for machine-readable tool metadata.
 | `task.ingest` | Insert or update normalized task dossiers |
 | `task.query` | Filter by view, extra filter, state, readiness, and limit |
 | `task.get` | Read the full dossier, active step, tree, and gate status |
+| `task.related` | List linked objectives that share a meta path value (default `meta.bundle`) |
 | `task.claim` | Atomically lease ready tasks to one worker |
 | `task.heartbeat` | Extend a worker's lease |
 | `task.cancel` | Durably cancel non-completed work, with an optional reason |
@@ -336,7 +337,9 @@ are host lifecycle commands, not MCP tools.
 
 `task.query` accepts `view`, `filter`, `states`, `ready`, `full`, and `limit`.
 `ready: true` means claimable now: unpaused backlog work with every dependency at
-`candidate` or `done`. `task.claim` accepts the same selection fields plus `owner`,
+`candidate` or `done`. `task.related` accepts `task` plus optional `path`
+(default `meta.bundle`), `include_self`, and `full`; it fails closed when the
+seed task has no value at that path. `task.claim` accepts the same selection fields plus `owner`,
 `lease_seconds`, and a maximum `limit` of 32. Higher `queue_priority` values are
 returned and claimed first, with URI as the tie-break. `task.reprioritize`
 requires `task` and signed integer `priority`; `task.cancel` accepts optional

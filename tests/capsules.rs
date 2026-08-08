@@ -202,6 +202,7 @@ fn surface_lists_capsule_methods() {
     let names = tools.iter().filter_map(|tool| tool["name"].as_str()).collect::<Vec<_>>();
     assert!(names.contains(&"taskfleet_workspace_prepare"));
     assert!(names.contains(&"taskfleet_task_context"));
+    assert!(names.contains(&"taskfleet_task_related"));
     assert!(names.contains(&"taskfleet_receipt_publish"));
     assert!(names.contains(&"taskfleet_artifact_publish"));
     let _ = run(&fixture.repo, &["status", "--porcelain"]);

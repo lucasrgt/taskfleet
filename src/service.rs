@@ -38,6 +38,7 @@ impl Service {
             "task.ingest" => self.ingest(input),
             "task.query" => self.query(input),
             "task.get" => self.status(&self.store.get(text(input, "task")?)?),
+            "task.related" => self.related(input),
             "task.claim" => self.claim(input),
             "task.heartbeat" => self.heartbeat(input),
             "task.cancel" => self.control(input, "cancel"),
@@ -101,6 +102,56 @@ impl Service {
             }
         }
         Ok(Value::Array(result))
+    }
+
+    fn related(&self, input: &Value) -> Result<Value> {
+        let row = self.store.get(text(input, "task")?)?;
+        let path = input["path"].as_str().unwrap_or("meta.bundle");
+        let dossier = row.value();
+        let Some(value) = at_path(&dossier, path).filter(|value| !value.is_null()) else {
+            bail!("task {} has no value at {path}; linked objectives require a shared meta path", row.task.uri);
+        };
+        if matches!(value, Value::String(text) if text.trim().is_empty()) {
+            bail!("task {} has an empty value at {path}", row.task.uri);
+        }
+        let include_self = input["include_self"].as_bool().unwrap_or(true);
+        let full = input["full"].as_bool().unwrap_or(false);
+        let mut related = Vec::new();
+        for other in self.store.all()? {
+            if !include_self && other.task.uri == row.task.uri {
+                continue;
+            }
+            let other_value = other.value();
+            if at_path(&other_value, path) != Some(value) {
+                continue;
+            }
+            related.push(if full {
+                serde_json::to_value(&other)?
+            } else {
+                json!({
+                    "uri": other.task.uri,
+                    "title": other.task.title,
+                    "role": other.task.meta.get("role"),
+                    "tags": other.task.tags,
+                    "priority": other.task.priority,
+                    "depends_on": other.task.depends_on,
+                    "queue_priority": other.queue_priority,
+                    "state": other.state,
+                    "paused": other.paused,
+                    "ready": self.store.ready(&other)?,
+                    "owner": other.owner,
+                    "error": other.error,
+                    "revision": other.revision,
+                })
+            });
+        }
+        Ok(json!({
+            "task": row.task.uri,
+            "path": path,
+            "value": value,
+            "count": related.len(),
+            "related": related,
+        }))
     }
 
     fn claim(&mut self, input: &Value) -> Result<Value> {
@@ -400,3 +451,4 @@ impl Service {
 #[rustfmt::skip] fn text<'a>(value: &'a Value, name: &str) -> Result<&'a str> { value[name].as_str().with_context(|| format!("missing {name}")) }
 #[rustfmt::skip] fn strings(value: &Value, name: &str) -> Vec<String> { value[name].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect() }
 #[rustfmt::skip] fn now() -> i64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64 }
+#[rustfmt::skip] fn at_path<'a>(root: &'a Value, path: &str) -> Option<&'a Value> { path.split('.').try_fold(root, |value, key| value.get(key)) }

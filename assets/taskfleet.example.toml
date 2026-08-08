@@ -19,3 +19,9 @@ cas_retention_seconds = 604800
 [[view]]
 id = "all"
 filter = { op = "true" }
+
+# Linked objectives share an arbitrary meta path (conventionally meta.bundle).
+# Roles stay free-form in meta.role — not a core type.
+# [[view]]
+# id = "bundle-example"
+# filter = { op = "eq", path = "meta.bundle", value = "example-pack" }

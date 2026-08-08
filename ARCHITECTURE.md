@@ -39,6 +39,12 @@ Filters form a safe recursive AST with `eq`, `ne`, ordered comparisons,
 normalized task dossier, including `meta.*`, `source.*`, and `execution.*`.
 Unknown or incompatible values do not match.
 
+Linked objectives share an arbitrary dossier path value, conventionally
+`meta.bundle`, with free-form roles in `meta.role`. `task.related` lists every
+task that shares that value so agents can assemble a multi-objective package
+without domain-specific core types. Dependencies still use `depends_on`; the
+shared path is only for discovery and projection.
+
 ## Execution state machine
 
 ```text

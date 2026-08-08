@@ -132,6 +132,7 @@ fn control_tools_publish_exact_machine_readable_schemas() {
         ("taskfleet_task_pause", vec!["task"]),
         ("taskfleet_task_resume", vec!["task"]),
         ("taskfleet_task_reprioritize", vec!["task", "priority"]),
+        ("taskfleet_task_related", vec!["task"]),
     ] {
         let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
         assert_eq!(tool["inputSchema"]["required"], json!(required));

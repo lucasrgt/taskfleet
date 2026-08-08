@@ -366,3 +366,58 @@ fn current_databases_migrate_and_newer_schemas_fail_closed() {
     };
     assert!(error.to_string().contains("unsupported database schema"));
 }
+
+#[test]
+fn related_lists_shared_meta_path_objectives_and_fails_closed_without_value() {
+    let fixture = Fixture::new("");
+    let mut service = fixture.service();
+    let mut story = task("pack://story", "Story", "any");
+    story["meta"] = json!({"bundle":"pack-1","role":"narrative"});
+    let mut ops = task("pack://ops", "Ops", "any");
+    ops["meta"] = json!({"bundle":"pack-1","role":"ops"});
+    let mut other = task("pack://other", "Other", "any");
+    other["meta"] = json!({"bundle":"pack-2","role":"noise"});
+    let lone = task("pack://lone", "Lone", "any");
+    ingest(&mut service, vec![story, ops, other, lone]);
+
+    assert!(
+        service
+            .call("task.related", &json!({"task":"pack://lone"}))
+            .unwrap_err()
+            .to_string()
+            .contains("meta.bundle")
+    );
+
+    let related = service.call("task.related", &json!({"task":"pack://story"})).unwrap();
+    assert_eq!(related["path"], "meta.bundle");
+    assert_eq!(related["value"], "pack-1");
+    assert_eq!(related["count"], 2);
+    let uris = related["related"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["uri"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(uris, vec!["pack://ops", "pack://story"]);
+    assert_eq!(related["related"][0]["role"], "ops");
+
+    let custom = service
+        .call("task.related", &json!({"task":"pack://story","path":"meta.role","include_self":false}))
+        .unwrap();
+    assert_eq!(custom["count"], 0);
+
+    let epic_a = {
+        let mut value = task("pack://epic-a", "Epic A", "any");
+        value["meta"] = json!({"epic":"E1","role":"alpha"});
+        value
+    };
+    let epic_b = {
+        let mut value = task("pack://epic-b", "Epic B", "any");
+        value["meta"] = json!({"epic":"E1","role":"beta"});
+        value
+    };
+    ingest(&mut service, vec![epic_a, epic_b]);
+    let by_epic = service.call("task.related", &json!({"task":"pack://epic-a","path":"meta.epic"})).unwrap();
+    assert_eq!(by_epic["count"], 2);
+    assert_eq!(by_epic["value"], "E1");
+}
