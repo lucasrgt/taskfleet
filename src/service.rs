@@ -8,7 +8,7 @@ use crate::{
     cas::Cas,
     integration,
     model::{Config, Filter, Task, TaskRow},
-    runtime,
+    pipeline, runtime,
     store::Store,
     workspace,
 };
@@ -39,6 +39,8 @@ impl Service {
             "task.query" => self.query(input),
             "task.get" => self.status(&self.store.get(text(input, "task")?)?),
             "task.related" => self.related(input),
+            "task.spawn" => self.spawn(input),
+            "task.rerun" => self.rerun(input),
             "task.claim" => self.claim(input),
             "task.heartbeat" => self.heartbeat(input),
             "task.cancel" => self.control(input, "cancel"),
@@ -152,6 +154,16 @@ impl Service {
             "count": related.len(),
             "related": related,
         }))
+    }
+
+    fn spawn(&mut self, input: &Value) -> Result<Value> {
+        let task = pipeline::spawn(&self.config, &mut self.store, input)?;
+        self.status(&self.store.get(&task.uri)?)
+    }
+
+    fn rerun(&mut self, input: &Value) -> Result<Value> {
+        let task = pipeline::rerun(&self.config, &mut self.store, input)?;
+        self.status(&self.store.get(&task.uri)?)
     }
 
     fn claim(&mut self, input: &Value) -> Result<Value> {
@@ -399,10 +411,12 @@ impl Service {
     }
 
     fn status(&self, row: &TaskRow) -> Result<Value> {
-        let workflow = self.config.workflow(row.active_workflow.as_deref())?;
-        let active = workflow.steps.get(row.step);
+        let workflow = self.config.workflow(row.active_workflow.as_deref().or(row.task.workflow.as_deref()))?;
+        let active = pipeline::resolve_active_step(&workflow, row.step, &row.task);
         let tree = row.worktree.as_deref().and_then(|path| runtime::tree(Path::new(path), false).ok());
-        let gates = active
+        let gates = workflow
+            .steps
+            .get(row.step)
             .map(|step| {
                 step.gates
                     .iter()
@@ -434,6 +448,7 @@ impl Service {
                 "workflow": row.active_workflow,
                 "step_index": row.step,
                 "active_step": active,
+                "max_runs": workflow.max_runs,
                 "owner": row.owner,
                 "lease_until": row.lease_until,
                 "branch": row.branch,

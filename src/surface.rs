@@ -16,6 +16,8 @@ const METHODS: &[(&str, &str, &[&str])] = &[
     ("task.query", "Query compact or full tasks by view, structured filter, state, readiness and limit", &[]),
     ("task.get", "Get one complete task dossier and execution state", &["task"]),
     ("task.related", "List linked objectives that share a dossier meta path value with a task", &["task"]),
+    ("task.spawn", "Create a backlog run from a workflow pipeline with optional args", &["workflow"]),
+    ("task.rerun", "Spawn a new run of an existing pipeline task without resetting the source uri", &["task"]),
     ("task.claim", "Atomically lease ready tasks selected by view/filter", &["owner"]),
     ("task.heartbeat", "Renew a task lease owned by a worker", &["task", "owner"]),
     ("task.cancel", "Durably cancel a non-completed task", &["task"]),
@@ -162,6 +164,8 @@ fn optionals(method: &str) -> &'static [&'static str] {
     match method {
         "task.query" => &["view", "filter", "states", "ready", "full", "limit"],
         "task.related" => &["path", "include_self", "full"],
+        "task.spawn" => &["uri", "title", "description", "tags", "priority", "source", "meta", "depends_on", "args", "series", "run"],
+        "task.rerun" => &["uri", "title", "description", "args", "series", "meta"],
         "task.claim" => &["view", "filter", "limit", "lease_seconds"],
         "task.heartbeat" => &["lease_seconds"],
         "task.cancel" => &["reason"],

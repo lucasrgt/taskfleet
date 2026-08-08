@@ -46,11 +46,29 @@ pub struct View { pub id: String, #[serde(default)] pub filter: Filter }
 
 #[rustfmt::skip]
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Workflow { pub id: String, #[serde(default, rename = "step")] pub steps: Vec<Step> }
+pub struct Workflow {
+    pub id: String,
+    #[serde(default, rename = "step")]
+    pub steps: Vec<Step>,
+    #[serde(default = "object")]
+    pub args: Value,
+    #[serde(default = "max_runs")]
+    pub max_runs: u32,
+}
 
 #[rustfmt::skip]
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Step { pub id: String, #[serde(default)] pub title: String, #[serde(default)] pub gates: Vec<String> }
+pub struct Step {
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub gates: Vec<String>,
+    #[serde(default)]
+    pub instruction: String,
+    #[serde(default = "object")]
+    pub args: Value,
+}
 
 #[rustfmt::skip]
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -203,7 +221,20 @@ fn compare(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
     }
 }
 
-#[rustfmt::skip] fn implicit_workflow() -> Workflow { Workflow { id: "implicit".into(), steps: vec![Step { id: "execute".into(), title: "Execute".into(), gates: vec![] }] } }
+#[rustfmt::skip] fn implicit_workflow() -> Workflow {
+    Workflow {
+        id: "implicit".into(),
+        steps: vec![Step {
+            id: "execute".into(),
+            title: "Execute".into(),
+            gates: vec![],
+            instruction: String::new(),
+            args: object(),
+        }],
+        args: object(),
+        max_runs: 1,
+    }
+}
 #[rustfmt::skip] fn absolute(base: &Path, path: &Path) -> PathBuf { if path.is_absolute() { path.into() } else { base.join(path) } }
 #[rustfmt::skip] fn schema() -> u32 { 1 }
 #[rustfmt::skip] fn dot() -> PathBuf { ".".into() }
@@ -218,4 +249,5 @@ fn compare(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
 #[rustfmt::skip] fn timeout() -> u64 { 900 }
 #[rustfmt::skip] fn required() -> bool { true }
 #[rustfmt::skip] fn object() -> Value { json!({}) }
+#[rustfmt::skip] fn max_runs() -> u32 { 1 }
 #[rustfmt::skip] fn unique<'a>(kind: &str, values: impl Iterator<Item = &'a str>) -> Result<()> { let mut seen = std::collections::HashSet::new(); for value in values { if !seen.insert(value) { bail!("duplicate {kind} id {value}"); } } Ok(()) }

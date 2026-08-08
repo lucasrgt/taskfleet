@@ -75,7 +75,13 @@ tasks are claimed by descending operational `queue_priority`, then URI. This
 integer is stored independently of the provider's imported `priority` field.
 Routes choose a workflow from task data; an explicit task workflow wins, then
 the first matching route, then the project default. With no workflow, Taskfleet
-uses one implicit `execute` step with no gates.
+uses one implicit `execute` step with no gates. Workflows are domain-agnostic
+pipelines: each step may carry a free-form `instruction` and default `args`.
+Resolved step args merge shallowly as workflow defaults, then step defaults,
+then the run input in `meta.args`. `task.spawn` creates a backlog run from a
+workflow id; `task.rerun` spawns a new uri (never resets the source). Workflow
+`max_runs` defaults to 1; `0` means unlimited. Optional `meta.series` scopes
+rerun counting within a pipeline.
 
 Before an agent advances a step, every applicable required gate referenced by
 that step must have a green gate receipt for the current clean Git tree.

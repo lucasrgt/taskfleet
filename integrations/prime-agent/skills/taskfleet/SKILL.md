@@ -1,6 +1,6 @@
 ---
 name: taskfleet
-description: Operate a local Taskfleet task DAG, claims, leases, worktrees, gates, workflow steps, linked objectives, integration, and recovery through its packaged MCP stdio server. Use when orchestrating or observing multi-agent repository work with Taskfleet.
+description: Operate a local Taskfleet task DAG, claims, leases, worktrees, gates, workflow pipelines, linked objectives, integration, and recovery through its packaged MCP stdio server. Use when orchestrating or observing multi-agent repository work with Taskfleet.
 ---
 
 # Taskfleet
@@ -42,6 +42,15 @@ arbitrary dossier path (conventionally `meta.bundle`) and optional free-form
 
 If `task.related` fails closed because the seed task has no shared path value,
 do not invent siblings — ask the operator or re-ingest with a bundle key.
+
+## Pipeline runs
+
+Workflows are domain-agnostic pipelines. After claim or spawn, read
+`execution.active_step.instruction` and `execution.active_step.args` (merged as
+workflow defaults < step defaults < `meta.args`). Create runs with
+`taskfleet_task_spawn(workflow="...", args={...})`. Repeat with
+`taskfleet_task_rerun(task="...")` — this always creates a new uri and respects
+`max_runs` (`0` = unlimited). Never reset a finished uri in place.
 
 Taskfleet remains the source of execution truth. Use Prime Agent subagents for
 implementation, keep claims alive with `taskfleet_task_heartbeat`, and advance

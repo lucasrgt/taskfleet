@@ -133,10 +133,15 @@ fn control_tools_publish_exact_machine_readable_schemas() {
         ("taskfleet_task_resume", vec!["task"]),
         ("taskfleet_task_reprioritize", vec!["task", "priority"]),
         ("taskfleet_task_related", vec!["task"]),
+        ("taskfleet_task_spawn", vec!["workflow"]),
+        ("taskfleet_task_rerun", vec!["task"]),
     ] {
         let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
         assert_eq!(tool["inputSchema"]["required"], json!(required));
-        assert_eq!(tool["inputSchema"]["properties"]["task"]["type"], "string");
+        for field in &required {
+            let expected = if *field == "priority" { "integer" } else { "string" };
+            assert_eq!(tool["inputSchema"]["properties"][field]["type"], expected);
+        }
     }
     let reprioritize = tools.iter().find(|tool| tool["name"] == "taskfleet_task_reprioritize").unwrap();
     assert_eq!(reprioritize["inputSchema"]["properties"]["priority"]["type"], "integer");

@@ -3,6 +3,7 @@ pub mod cas;
 pub mod integration;
 pub mod location;
 pub mod model;
+pub mod pipeline;
 pub mod receipt;
 pub mod runtime;
 pub mod service;

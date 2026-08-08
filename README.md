@@ -303,6 +303,8 @@ Run `taskfleet methods` for machine-readable tool metadata.
 | `task.query` | Filter by view, extra filter, state, readiness, and limit |
 | `task.get` | Read the full dossier, active step, tree, and gate status |
 | `task.related` | List linked objectives that share a meta path value (default `meta.bundle`) |
+| `task.spawn` | Create a backlog pipeline run from a workflow id with optional args |
+| `task.rerun` | Spawn a new run of a pipeline task without resetting the source uri |
 | `task.claim` | Atomically lease ready tasks to one worker |
 | `task.heartbeat` | Extend a worker's lease |
 | `task.cancel` | Durably cancel non-completed work, with an optional reason |
@@ -339,7 +341,10 @@ are host lifecycle commands, not MCP tools.
 `ready: true` means claimable now: unpaused backlog work with every dependency at
 `candidate` or `done`. `task.related` accepts `task` plus optional `path`
 (default `meta.bundle`), `include_self`, and `full`; it fails closed when the
-seed task has no value at that path. `task.claim` accepts the same selection fields plus `owner`,
+seed task has no value at that path. `task.spawn` accepts `workflow` plus
+optional `args`, `uri`, `title`, and `series`. `task.rerun` accepts `task` plus
+optional `args` overrides and fails closed on running work or when `max_runs`
+is exhausted (`0` means unlimited). `task.claim` accepts the same selection fields plus `owner`,
 `lease_seconds`, and a maximum `limit` of 32. Higher `queue_priority` values are
 returned and claimed first, with URI as the tie-break. `task.reprioritize`
 requires `task` and signed integer `priority`; `task.cancel` accepts optional

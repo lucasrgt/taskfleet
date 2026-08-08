@@ -25,3 +25,19 @@ filter = { op = "true" }
 # [[view]]
 # id = "bundle-example"
 # filter = { op = "eq", path = "meta.bundle", value = "example-pack" }
+
+# Workflows are domain-agnostic pipelines. max_runs=0 means unlimited reruns.
+# Args merge as workflow.args < step.args < meta.args (run input).
+# [[workflow]]
+# id = "repeatable-pack"
+# max_runs = 0
+# args = { language = "en" }
+# [[workflow.step]]
+# id = "prepare"
+# title = "Prepare"
+# instruction = "Gather inputs using the resolved args"
+# args = { phase = "prepare" }
+# [[workflow.step]]
+# id = "deliver"
+# title = "Deliver"
+# instruction = "Produce the final artifact for this run"
