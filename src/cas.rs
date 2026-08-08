@@ -137,19 +137,19 @@ fn try_cow_clone(src: &Path, dst: &Path) -> bool {
     }
     #[cfg(target_os = "linux")]
     {
-        return Command::new("cp")
+        Command::new("cp")
             .args(["--reflink=auto", "--", &src.display().to_string(), &dst.display().to_string()])
             .status()
             .map(|status| status.success() && dst.exists())
-            .unwrap_or(false);
+            .unwrap_or(false)
     }
     #[cfg(target_os = "macos")]
     {
-        return Command::new("cp")
+        Command::new("cp")
             .args(["-c", "--", &src.display().to_string(), &dst.display().to_string()])
             .status()
             .map(|status| status.success() && dst.exists())
-            .unwrap_or(false);
+            .unwrap_or(false)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
